@@ -75,11 +75,14 @@ class WithDefaultPeripherals extends Config((site, here, up) => {
 class WithArtyTweaks extends Config(
   new WithUART ++
   new WithDDRMem ++
+  new WithArty100TJTAGHarnessBinder ++
+  new WithDebugResetPassthrough ++
   new WithTLIOPassthrough ++
   new WithUARTIOPassthrough ++
   new WithDefaultPeripherals ++
   new chipyard.config.WithTLBackingMemory ++
   new WithSystemModifications ++
+  new WithArtyResetHarnessBinder++
   //new chipyard.config.WithNoDebug ++
   new freechips.rocketchip.subsystem.WithoutTLMonitors ++
   new freechips.rocketchip.subsystem.WithNMemoryChannels(1) ++
@@ -87,7 +90,7 @@ class WithArtyTweaks extends Config(
 
 class TinyRocketArtyDDRConfig extends Config(
   new WithArtyTweaks ++
-    new freechips.rocketchip.subsystem.WithNMedCores(1) ++         // single rocket-core
+  new freechips.rocketchip.subsystem.WithNMedCores(1) ++         // single rocket-core
   new chipyard.fpga.arty_a7_100.AbstractConfig)
 // DOC include end: AbstractArty and Rocket
 class WithSystemModifications extends Config((site, hear, up) => {
@@ -103,5 +106,3 @@ class WithFPGAFreq25MHz extends WithFPGAFrequency(25)
 class WithFPGAFreq50MHz extends WithFPGAFrequency(50)
 class WithFPGAFreq75MHz extends WithFPGAFrequency(75)
 class WithFPGAFreq100MHz extends WithFPGAFrequency(100)
-
-

@@ -1,7 +1,7 @@
 package chipyard.fpga.arty_a7_100
 
 import chisel3._
-import chisel3.experimental.{IO}
+import chisel3.experimental.{IO, Analog}
 
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.config._
@@ -71,12 +71,25 @@ class Arty100TFPGATestHarnessImp (_outer: Arty100TFPGATestHarness) extends LazyR
 
   val resetIBUF = Module(new IBUF)
   resetIBUF.io.I := reset
+  val ndreset    = Wire(Bool())
+
+
+  // jtag interface
+  // JD (used for JTAG connection)
+  val jd_0         = IO(Analog(1.W))  // TDO
+  val jd_1         = IO(Analog(1.W))  // TRST_n
+  val jd_2         = IO(Analog(1.W))  // TCK
+  val jd_4         = IO(Analog(1.W))  // TDI
+  val jd_5         = IO(Analog(1.W))  // TMS
+  val jd_6         = IO(Analog(1.W))  // SRST_n
+
+  val SRST_n         = Wire(Bool())
 
   val sysclk: Clock = _outer.sysClkNode.out.head._1.clock
   val powerOnReset: Bool = PowerOnResetFPGAOnly(sysclk)
   _outer.sdc.addAsyncPath(Seq(powerOnReset))
 
-  _outer.pllReset := (resetIBUF.io.O || powerOnReset)
+  _outer.pllReset := (!resetIBUF.io.O || powerOnReset || ndreset)
 
   // reset setup
   val hReset = Wire(Reset())
