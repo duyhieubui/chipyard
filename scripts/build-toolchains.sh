@@ -6,10 +6,21 @@
 set -e
 set -o pipefail
 
+# On macOS, use GNU readlink from 'coreutils' package in Homebrew/MacPorts
+if [ "$(uname -s)" = "Darwin" ] ; then
+    READLINK=greadlink
+else
+    READLINK=readlink
+fi
+
 # If BASH_SOURCE is undefined, we may be running under zsh, in that case
 # provide a zsh-compatible alternative
-DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]:-${(%):-%x}}")")"
+DIR="$(dirname "$($READLINK -f "${BASH_SOURCE[0]:-${(%):-%x}}")")"
 CHIPYARD_DIR="$(dirname "$DIR")"
+
+# Allow user to override MAKE
+[ -n "${MAKE:+x}" ] || MAKE=$(command -v gnumake || command -v gmake || command -v make)
+readonly MAKE
 
 usage() {
     echo "usage: ${0} [OPTIONS] [riscv-tools | esp-tools | ec2fast]"
@@ -143,7 +154,9 @@ else
     module_make riscv-gnu-toolchain linux
 fi
 
-module_all riscv-isa-sim --prefix="${RISCV}"
+# disable boost explicitly for https://github.com/riscv-software-src/riscv-isa-sim/issues/834
+# since we don't have it in our requirements
+module_all riscv-isa-sim --prefix="${RISCV}" --with-boost=no --with-boost-asio=no --with-boost-regex=no
 # build static libfesvr library for linking into firesim driver (or others)
 echo '==>  Installing libfesvr static library'
 module_make riscv-isa-sim libfesvr.a
@@ -175,8 +188,24 @@ if [ -z "$IGNOREQEMU" ] ; then
     git -C "$dir" submodule foreach --quiet --recursive '! grep -q "git\.qemu\.org" .gitmodules 2>/dev/null' && \
     echo "==>  PLEASE REMOVE qemu URL-REWRITING from scripts/build-toolchains.sh. It is no longer needed!" && exit 1
 
+    (
+    # newer version of BFD-based ld has made '-no-pie' an error because it renamed to '--no-pie'
+    # meanwhile, ld.gold will still accept '-no-pie'
+    # QEMU 5.0 still uses '-no-pie' in it's linker options
+
+    # default LD to ld if it isn't set
+    if ( set +o pipefail; ${LD:-ld} -no-pie |& grep 'did you mean --no-pie' >/dev/null); then
+	echo "==>  LD doesn't like '-no-pie'"
+	# LD has the problem, look for ld.gold
+	if type ld.gold >&/dev/null; then
+	    echo "==>  Using ld.gold to link QEMU"
+	    export LD=ld.gold
+	fi
+    fi
+
     # now actually do the build
-    SRCDIR="$(pwd)/toolchains" module_build qemu --prefix="${RISCV}" --target-list=riscv${XLEN}-softmmu
+    SRCDIR="$(pwd)/toolchains" module_build qemu --prefix="${RISCV}" --target-list=riscv${XLEN}-softmmu --disable-werror
+    )
 fi
 
 # make Dromajo

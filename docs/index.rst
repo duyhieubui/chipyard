@@ -1,15 +1,11 @@
-.. Chipyard documentation master file, created by
-   sphinx-quickstart on Fri Mar  8 11:46:38 2019.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
-
-Welcome to Chipyard's documentation!
-====================================
+Welcome to Chipyard's documentation (version "|version|")!
+==========================================================
 
 .. image:: ./_static/images/chipyard-logo.svg
 
 Chipyard is a framework for designing and evaluating full-system hardware using agile teams.
 It is composed of a collection of tools and libraries designed to provide an integration between open-source and commercial tools for the development of systems-on-chip.
+This work is supported by the NSF CCRI ENS Chipyard Award #201662.
 
 .. IMPORTANT:: **New to Chipyard?** Jump to the :ref:`Chipyard-Basics/Initial-Repo-Setup:Initial Repository Setup` page for setup instructions.
 
