@@ -1,0 +1,1684 @@
+diff --git a/src/main/scala/devices/xilinx/xilinxzcu106mig/XilinxZCU106MIG.scala b/src/main/scala/devices/xilinx/xilinxzcu106mig/XilinxZCU106MIG.scala
+new file mode 100644
+index 0000000..3166170
+--- /dev/null
++++ b/src/main/scala/devices/xilinx/xilinxzcu106mig/XilinxZCU106MIG.scala
+@@ -0,0 +1,166 @@
++// See LICENSE for license details.
++package sifive.fpgashells.devices.xilinx.xilinxzcu106mig
++
++import chisel3._
++import chisel3.experimental.{Analog,attach}
++import freechips.rocketchip.amba.axi4._
++import freechips.rocketchip.subsystem._
++import freechips.rocketchip.diplomacy._
++import freechips.rocketchip.tilelink._
++import freechips.rocketchip.interrupts._
++import freechips.rocketchip.prci._
++import org.chipsalliance.cde.config.Parameters
++import sifive.fpgashells.ip.xilinx.zcu106mig.{ZCU106MIGIOClocksReset, ZCU106MIGIODDR, zcu106mig}
++
++case class XilinxZCU106MIGParams(
++  address : Seq[AddressSet]
++)
++
++class XilinxZCU106MIGPads(depth : BigInt) extends ZCU106MIGIODDR(depth) {
++  def this(c : XilinxZCU106MIGParams) {
++    this(AddressRange.fromSets(c.address).head.size)
++  }
++}
++
++class XilinxZCU106MIGIO(depth : BigInt) extends ZCU106MIGIODDR(depth) with ZCU106MIGIOClocksReset
++
++class XilinxZCU106MIGIsland(c : XilinxZCU106MIGParams)(implicit p: Parameters) extends LazyModule with CrossesToOnlyOneClockDomain {
++  val ranges = AddressRange.fromSets(c.address)
++  require (ranges.size == 1, "DDR range must be contiguous")
++  val offset = ranges.head.base
++  val depth = ranges.head.size
++  val crossing = AsynchronousCrossing(8)
++  require((depth<=0x80000000L),"zcu106mig supports upto 2GB depth configuraton")
++  
++  val device = new MemoryDevice
++  val node = AXI4SlaveNode(Seq(AXI4SlavePortParameters(
++      slaves = Seq(AXI4SlaveParameters(
++      address       = c.address,
++      resources     = device.reg,
++      regionType    = RegionType.UNCACHED,
++      executable    = true,
++      supportsWrite = TransferSizes(1, 256*8),
++      supportsRead  = TransferSizes(1, 256*8))),
++    beatBytes = 8)))
++
++  lazy val module = new Impl
++  class Impl extends LazyModuleImp(this) {
++    val io = IO(new Bundle {
++      val port = new XilinxZCU106MIGIO(depth)
++    })
++
++    //MIG black box instantiation
++    val blackbox = Module(new zcu106mig(depth))
++    val (axi_async, _) = node.in(0)
++
++    //pins to top level
++
++    //inouts
++    attach(io.port.c0_ddr4_dq,blackbox.io.c0_ddr4_dq)
++    attach(io.port.c0_ddr4_dqs_c,blackbox.io.c0_ddr4_dqs_c)
++    attach(io.port.c0_ddr4_dqs_t,blackbox.io.c0_ddr4_dqs_t)
++    attach(io.port.c0_ddr4_dm_dbi_n,blackbox.io.c0_ddr4_dm_dbi_n)
++
++    //outputs
++    io.port.c0_ddr4_adr         := blackbox.io.c0_ddr4_adr
++    io.port.c0_ddr4_bg          := blackbox.io.c0_ddr4_bg
++    io.port.c0_ddr4_ba          := blackbox.io.c0_ddr4_ba
++    io.port.c0_ddr4_reset_n     := blackbox.io.c0_ddr4_reset_n
++    io.port.c0_ddr4_act_n       := blackbox.io.c0_ddr4_act_n
++    io.port.c0_ddr4_ck_c        := blackbox.io.c0_ddr4_ck_c
++    io.port.c0_ddr4_ck_t        := blackbox.io.c0_ddr4_ck_t
++    io.port.c0_ddr4_cke         := blackbox.io.c0_ddr4_cke
++    io.port.c0_ddr4_cs_n        := blackbox.io.c0_ddr4_cs_n
++    io.port.c0_ddr4_odt         := blackbox.io.c0_ddr4_odt
++
++    //inputs
++    //NO_BUFFER clock
++    blackbox.io.c0_sys_clk_i    := io.port.c0_sys_clk_i
++
++    io.port.c0_ddr4_ui_clk      := blackbox.io.c0_ddr4_ui_clk
++    io.port.c0_ddr4_ui_clk_sync_rst := blackbox.io.c0_ddr4_ui_clk_sync_rst
++    blackbox.io.c0_ddr4_aresetn := io.port.c0_ddr4_aresetn
++
++    val awaddr = axi_async.aw.bits.addr - offset.U
++    val araddr = axi_async.ar.bits.addr - offset.U
++
++    //slave AXI interface write address ports
++    blackbox.io.c0_ddr4_s_axi_awid    := axi_async.aw.bits.id
++    blackbox.io.c0_ddr4_s_axi_awaddr  := awaddr //truncated
++    blackbox.io.c0_ddr4_s_axi_awlen   := axi_async.aw.bits.len
++    blackbox.io.c0_ddr4_s_axi_awsize  := axi_async.aw.bits.size
++    blackbox.io.c0_ddr4_s_axi_awburst := axi_async.aw.bits.burst
++    blackbox.io.c0_ddr4_s_axi_awlock  := axi_async.aw.bits.lock
++    blackbox.io.c0_ddr4_s_axi_awcache := "b0011".U
++    blackbox.io.c0_ddr4_s_axi_awprot  := axi_async.aw.bits.prot
++    blackbox.io.c0_ddr4_s_axi_awqos   := axi_async.aw.bits.qos
++    blackbox.io.c0_ddr4_s_axi_awvalid := axi_async.aw.valid
++    axi_async.aw.ready        := blackbox.io.c0_ddr4_s_axi_awready
++
++    //slave interface write data ports
++    blackbox.io.c0_ddr4_s_axi_wdata   := axi_async.w.bits.data
++    blackbox.io.c0_ddr4_s_axi_wstrb   := axi_async.w.bits.strb
++    blackbox.io.c0_ddr4_s_axi_wlast   := axi_async.w.bits.last
++    blackbox.io.c0_ddr4_s_axi_wvalid  := axi_async.w.valid
++    axi_async.w.ready         := blackbox.io.c0_ddr4_s_axi_wready
++
++    //slave interface write response
++    blackbox.io.c0_ddr4_s_axi_bready  := axi_async.b.ready
++    axi_async.b.bits.id       := blackbox.io.c0_ddr4_s_axi_bid
++    axi_async.b.bits.resp     := blackbox.io.c0_ddr4_s_axi_bresp
++    axi_async.b.valid         := blackbox.io.c0_ddr4_s_axi_bvalid
++
++    //slave AXI interface read address ports
++    blackbox.io.c0_ddr4_s_axi_arid    := axi_async.ar.bits.id
++    blackbox.io.c0_ddr4_s_axi_araddr  := araddr // truncated
++    blackbox.io.c0_ddr4_s_axi_arlen   := axi_async.ar.bits.len
++    blackbox.io.c0_ddr4_s_axi_arsize  := axi_async.ar.bits.size
++    blackbox.io.c0_ddr4_s_axi_arburst := axi_async.ar.bits.burst
++    blackbox.io.c0_ddr4_s_axi_arlock  := axi_async.ar.bits.lock
++    blackbox.io.c0_ddr4_s_axi_arcache := "b0011".U
++    blackbox.io.c0_ddr4_s_axi_arprot  := axi_async.ar.bits.prot
++    blackbox.io.c0_ddr4_s_axi_arqos   := axi_async.ar.bits.qos
++    blackbox.io.c0_ddr4_s_axi_arvalid := axi_async.ar.valid
++    axi_async.ar.ready        := blackbox.io.c0_ddr4_s_axi_arready
++
++    //slace AXI interface read data ports
++    blackbox.io.c0_ddr4_s_axi_rready  := axi_async.r.ready
++    axi_async.r.bits.id       := blackbox.io.c0_ddr4_s_axi_rid
++    axi_async.r.bits.data     := blackbox.io.c0_ddr4_s_axi_rdata
++    axi_async.r.bits.resp     := blackbox.io.c0_ddr4_s_axi_rresp
++    axi_async.r.bits.last     := blackbox.io.c0_ddr4_s_axi_rlast
++    axi_async.r.valid         := blackbox.io.c0_ddr4_s_axi_rvalid
++
++    //misc
++    io.port.c0_init_calib_complete := blackbox.io.c0_init_calib_complete
++    blackbox.io.sys_rst       := io.port.sys_rst
++  }
++}
++
++class XilinxZCU106MIG(c : XilinxZCU106MIGParams)(implicit p: Parameters) extends LazyModule {
++  val ranges = AddressRange.fromSets(c.address)
++  val depth = ranges.head.size
++
++  val buffer  = LazyModule(new TLBuffer)
++  val toaxi4  = LazyModule(new TLToAXI4(adapterName = Some("mem")))
++  val indexer = LazyModule(new AXI4IdIndexer(idBits = 4))
++  val deint   = LazyModule(new AXI4Deinterleaver(p(CacheBlockBytes)))
++  val yank    = LazyModule(new AXI4UserYanker)
++  val island  = LazyModule(new XilinxZCU106MIGIsland(c))
++
++  val node: TLInwardNode =
++    island.crossAXI4In(island.node) := yank.node := deint.node := indexer.node := toaxi4.node := buffer.node
++
++  lazy val module = new Impl
++  class Impl extends LazyModuleImp(this) {
++    val io = IO(new Bundle {
++      val port = new XilinxZCU106MIGIO(depth)
++    })
++
++    io.port <> island.module.io.port
++
++    // Shove the island
++    island.module.clock := io.port.c0_ddr4_ui_clk
++    island.module.reset := io.port.c0_ddr4_ui_clk_sync_rst
++  }
++}
+diff --git a/src/main/scala/devices/xilinx/xilinxzcu106mig/XilinxZCU106MIGPeriphery.scala b/src/main/scala/devices/xilinx/xilinxzcu106mig/XilinxZCU106MIGPeriphery.scala
+new file mode 100644
+index 0000000..f5aba46
+--- /dev/null
++++ b/src/main/scala/devices/xilinx/xilinxzcu106mig/XilinxZCU106MIGPeriphery.scala
+@@ -0,0 +1,36 @@
++// See LICENSE for license details.
++package sifive.fpgashells.devices.xilinx.xilinxzcu106mig
++
++import chisel3._
++import org.chipsalliance.cde.config._
++import freechips.rocketchip.tilelink.TLWidthWidget
++import freechips.rocketchip.subsystem.{BaseSubsystem, MBUS}
++import freechips.rocketchip.diplomacy.{LazyModule, LazyModuleImp, AddressRange}
++
++case object MemoryXilinxDDRKey extends Field[XilinxZCU106MIGParams]
++
++trait HasMemoryXilinxZCU106MIG { this: BaseSubsystem =>
++  val module: HasMemoryXilinxZCU106MIGModuleImp
++
++  val xilinxzcu106mig = LazyModule(new XilinxZCU106MIG(p(MemoryXilinxDDRKey)))
++  private val mbus = locateTLBusWrapper(MBUS)
++  mbus.coupleTo("xilinxzcu106mig") { xilinxzcu106mig.node := TLWidthWidget(mbus.beatBytes) := _}
++}
++
++trait HasMemoryXilinxZCU106MIGBundle {
++  val xilinxzcu106mig: XilinxZCU106MIGIO
++  def connectXilinxZCU106MIGToPads(pads: XilinxZCU106MIGPads) {
++    pads <> xilinxzcu106mig
++  }
++}
++
++trait HasMemoryXilinxZCU106MIGModuleImp extends LazyModuleImp
++    with HasMemoryXilinxZCU106MIGBundle {
++  val outer: HasMemoryXilinxZCU106MIG
++  val ranges = AddressRange.fromSets(p(MemoryXilinxDDRKey).address)
++  require (ranges.size == 1, "DDR range must be contiguous")
++  val depth = ranges.head.size
++  val xilinxzcu106mig = IO(new XilinxZCU106MIGIO(depth))
++
++  xilinxzcu106mig <> outer.xilinxzcu106mig.module.io.port
++}
+diff --git a/src/main/scala/ip/xilinx/Xilinx.scala b/src/main/scala/ip/xilinx/Xilinx.scala
+index 488b19b..1e33faa 100644
+--- a/src/main/scala/ip/xilinx/Xilinx.scala
++++ b/src/main/scala/ip/xilinx/Xilinx.scala
+@@ -366,6 +366,139 @@ class sdio_spi_bridge() extends BlackBox
+   })
+ }
+ 
++
++//-------------------------------------------------------------------------
++// zcu106_sys_clock_mmcm
++//-------------------------------------------------------------------------
++//IP : xilinx mmcm with "NO_BUFFER" input clock
++
++class zcu106_sys_clock_mmcm0 extends BlackBox {
++  val io = new Bundle {
++    val clk_in1   = Input(Bool())
++    val clk_out1  = Output(Clock())
++    val clk_out2  = Output(Clock())
++    val clk_out3  = Output(Clock())
++    val clk_out4  = Output(Clock())
++    val clk_out5  = Output(Clock())
++    val clk_out6  = Output(Clock())
++    val clk_out7  = Output(Clock())
++    val reset     = Input(Bool())
++    val locked    = Output(Bool())
++  }
++
++  ElaborationArtefacts.add(
++    "zcu106_sys_clock_mmcm0.vivado.tcl",
++    """create_ip -name clk_wiz -vendor xilinx.com -library ip -module_name zcu106_sys_clock_mmcm0 -dir $ipdir -force
++    set_property -dict [list \
++    CONFIG.CLK_IN1_BOARD_INTERFACE {Custom} \
++    CONFIG.PRIM_SOURCE {No_buffer} \
++    CONFIG.CLKOUT2_USED {true} \
++    CONFIG.CLKOUT3_USED {true} \
++    CONFIG.CLKOUT4_USED {true} \
++    CONFIG.CLKOUT5_USED {true} \
++    CONFIG.CLKOUT6_USED {true} \
++    CONFIG.CLKOUT7_USED {true} \
++    CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {12.5} \
++    CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {25} \
++    CONFIG.CLKOUT3_REQUESTED_OUT_FREQ {37.5} \
++    CONFIG.CLKOUT4_REQUESTED_OUT_FREQ {50} \
++    CONFIG.CLKOUT5_REQUESTED_OUT_FREQ {100} \
++    CONFIG.CLKOUT6_REQUESTED_OUT_FREQ {150.000} \
++    CONFIG.CLKOUT7_REQUESTED_OUT_FREQ {75} \
++    CONFIG.CLK_IN1_BOARD_INTERFACE {Custom} \
++    CONFIG.PRIM_IN_FREQ {250.000} \
++    CONFIG.CLKIN1_JITTER_PS {50.0} \
++    CONFIG.MMCM_DIVCLK_DIVIDE {5} \
++    CONFIG.MMCM_CLKFBOUT_MULT_F {24.000} \
++    CONFIG.MMCM_CLKIN1_PERIOD {4.000} \
++    CONFIG.MMCM_CLKOUT0_DIVIDE_F {96.000} \
++    CONFIG.MMCM_CLKOUT1_DIVIDE {48} \
++    CONFIG.MMCM_CLKOUT2_DIVIDE {32} \
++    CONFIG.MMCM_CLKOUT3_DIVIDE {24} \
++    CONFIG.MMCM_CLKOUT4_DIVIDE {12} \
++    CONFIG.MMCM_CLKOUT5_DIVIDE {8} \
++    CONFIG.MMCM_CLKOUT6_DIVIDE {16} \
++    CONFIG.NUM_OUT_CLKS {7} \
++    CONFIG.CLKOUT1_JITTER {213.008} \
++    CONFIG.CLKOUT1_PHASE_ERROR {154.678} \
++    CONFIG.CLKOUT2_JITTER {179.547} \
++    CONFIG.CLKOUT2_PHASE_ERROR {154.678} \
++    CONFIG.CLKOUT3_JITTER {164.187} \
++    CONFIG.CLKOUT3_PHASE_ERROR {154.678} \
++    CONFIG.CLKOUT4_JITTER {154.688} \
++    CONFIG.CLKOUT4_PHASE_ERROR {154.678} \
++    CONFIG.CLKOUT5_JITTER {135.165} \
++    CONFIG.CLKOUT5_PHASE_ERROR {154.678} \
++    CONFIG.CLKOUT6_JITTER {126.046} \
++    CONFIG.CLKOUT6_PHASE_ERROR {154.678} \
++    CONFIG.CLKOUT7_JITTER {142.781} \
++    CONFIG.CLKOUT7_PHASE_ERROR {154.678}] [get_ips zcu106_sys_clock_mmcm0] """
++  )
++}
++
++class zcu106_sys_clock_mmcm1 extends BlackBox {
++  val io = new Bundle {
++    val clk_in1   = Input(Bool())
++    val clk_out1  = Output(Clock())
++    val clk_out2  = Output(Clock())
++    val reset     = Input(Bool())
++    val locked    = Output(Bool())
++  }
++
++  ElaborationArtefacts.add(
++    "zcu106_sys_clock_mmcm1.vivado.tcl",
++    """create_ip -name clk_wiz -vendor xilinx.com -library ip -module_name zcu106_sys_clock_mmcm1 -dir $ipdir -force
++    set_property -dict [list \
++    CONFIG.CLK_IN1_BOARD_INTERFACE {Custom} \
++    CONFIG.PRIM_SOURCE {No_buffer} \
++    CONFIG.CLKOUT2_USED {true} \
++    CONFIG.CLKOUT3_USED {false} \
++    CONFIG.CLKOUT4_USED {false} \
++    CONFIG.CLKOUT5_USED {false} \
++    CONFIG.CLKOUT6_USED {false} \
++    CONFIG.CLKOUT7_USED {false} \
++    CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {32.5} \
++    CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {65} \
++    CONFIG.CLK_IN1_BOARD_INTERFACE {Custom} \
++    CONFIG.PRIM_IN_FREQ {250.000} \
++    CONFIG.CLKIN1_JITTER_PS {50.0} \
++    CONFIG.MMCM_DIVCLK_DIVIDE {25} \
++    CONFIG.MMCM_CLKFBOUT_MULT_F {117.000} \
++    CONFIG.MMCM_CLKIN1_PERIOD {4.000} \
++    CONFIG.MMCM_CLKOUT0_DIVIDE_F {36.000} \
++    CONFIG.MMCM_CLKOUT1_DIVIDE {18} \
++    CONFIG.MMCM_CLKOUT2_DIVIDE {1} \
++    CONFIG.MMCM_CLKOUT3_DIVIDE {1} \
++    CONFIG.MMCM_CLKOUT4_DIVIDE {1} \
++    CONFIG.MMCM_CLKOUT5_DIVIDE {1} \
++    CONFIG.MMCM_CLKOUT6_DIVIDE {1} \
++    CONFIG.NUM_OUT_CLKS {2} \
++    CONFIG.CLKOUT1_JITTER {257.594} \
++    CONFIG.CLKOUT1_PHASE_ERROR {366.693} \
++    CONFIG.CLKOUT2_JITTER {232.023} \
++    CONFIG.CLKOUT2_PHASE_ERROR {366.693}] \
++    [get_ips zcu106_sys_clock_mmcm1] """
++  )
++}
++
++//-------------------------------------------------------------------------
++// zcu106reset
++//-------------------------------------------------------------------------
++
++class zcu106reset() extends BlackBox
++{
++  val io = new Bundle{
++    val areset = Input(Bool())
++    val clock1 = Input(Clock())
++    val reset1 = Output(Bool())
++    val clock2 = Input(Clock())
++    val reset2 = Output(Bool())
++    val clock3 = Input(Clock())
++    val reset3 = Output(Bool())
++    val clock4 = Input(Clock())
++    val reset4 = Output(Bool())
++  }
++}
+ /*
+    Copyright 2016 SiFive, Inc.
+ 
+diff --git a/src/main/scala/ip/xilinx/zcu106mig/zcu106mig.scala b/src/main/scala/ip/xilinx/zcu106mig/zcu106mig.scala
+new file mode 100644
+index 0000000..ec95d25
+--- /dev/null
++++ b/src/main/scala/ip/xilinx/zcu106mig/zcu106mig.scala
+@@ -0,0 +1,178 @@
++// See LICENSE for license details.
++package sifive.fpgashells.ip.xilinx.zcu106mig
++
++import chisel3._
++import chisel3.experimental.{Analog,attach}
++import freechips.rocketchip.util.{ElaborationArtefacts}
++import org.chipsalliance.cde.config._
++
++// IP VLNV: xilinx.com:customize_ip:zcu106mig:1.0
++// Black Box
++
++class ZCU106MIGIODDR(depth : BigInt) extends Bundle {
++  require((depth<=0x40000000L*4),"ZCU106MIGIODDR supports upto 2GB depth configuraton")
++  val c0_ddr4_adr           = Output(Bits(17.W))
++  val c0_ddr4_bg            = Output(Bits(1.W))
++  val c0_ddr4_ba            = Output(Bits(2.W))
++  val c0_ddr4_reset_n       = Output(Bool())
++  val c0_ddr4_act_n         = Output(Bool())
++  val c0_ddr4_ck_c          = Output(Bits(1.W))
++  val c0_ddr4_ck_t          = Output(Bits(1.W))
++  val c0_ddr4_cke           = Output(Bits(1.W))
++  val c0_ddr4_cs_n          = Output(Bits(1.W))
++  val c0_ddr4_odt           = Output(Bits(1.W))
++
++  val c0_ddr4_dq            = Analog(64.W)
++  val c0_ddr4_dqs_c         = Analog(8.W)
++  val c0_ddr4_dqs_t         = Analog(8.W)
++  val c0_ddr4_dm_dbi_n      = Analog(8.W)
++}
++
++//reused directly in io bundle for sifive.blocks.devices.xilinxzcu106mig
++trait ZCU106MIGIOClocksReset extends Bundle {
++  //inputs
++  //"NO_BUFFER" clock source (must be connected to IBUF outside of IP)
++  val c0_sys_clk_i              = Input(Bool())
++  //user interface signals
++  val c0_ddr4_ui_clk            = Output(Clock())
++  val c0_ddr4_ui_clk_sync_rst   = Output(Bool())
++  val c0_ddr4_aresetn           = Input(Bool())
++  //misc
++  val c0_init_calib_complete    = Output(Bool())
++  val sys_rst                   = Input(Bool())
++}
++
++//scalastyle:off
++//turn off linter: blackbox name must match verilog module
++class zcu106mig(depth : BigInt)(implicit val p:Parameters) extends BlackBox
++{
++  require((depth<=(0x40000000L*2)),"zcu106mig supports upto 2GB depth configuraton")
++
++  val io = IO(new ZCU106MIGIODDR(depth) with ZCU106MIGIOClocksReset {
++    //slave interface write address ports
++    val c0_ddr4_s_axi_awid            = Input(Bits(4.W))
++    val c0_ddr4_s_axi_awaddr          = Input(Bits(31.W))
++    val c0_ddr4_s_axi_awlen           = Input(Bits(8.W))
++    val c0_ddr4_s_axi_awsize          = Input(Bits(3.W))
++    val c0_ddr4_s_axi_awburst         = Input(Bits(2.W))
++    val c0_ddr4_s_axi_awlock          = Input(Bits(1.W))
++    val c0_ddr4_s_axi_awcache         = Input(Bits(4.W))
++    val c0_ddr4_s_axi_awprot          = Input(Bits(3.W))
++    val c0_ddr4_s_axi_awqos           = Input(Bits(4.W))
++    val c0_ddr4_s_axi_awvalid         = Input(Bool())
++    val c0_ddr4_s_axi_awready         = Output(Bool())
++    //slave interface write data ports
++    val c0_ddr4_s_axi_wdata           = Input(Bits(64.W))
++    val c0_ddr4_s_axi_wstrb           = Input(Bits(8.W))
++    val c0_ddr4_s_axi_wlast           = Input(Bool())
++    val c0_ddr4_s_axi_wvalid          = Input(Bool())
++    val c0_ddr4_s_axi_wready          = Output(Bool())
++    //slave interface write response ports
++    val c0_ddr4_s_axi_bready          = Input(Bool())
++    val c0_ddr4_s_axi_bid             = Output(Bits(4.W))
++    val c0_ddr4_s_axi_bresp           = Output(Bits(2.W))
++    val c0_ddr4_s_axi_bvalid          = Output(Bool())
++    //slave interface read address ports
++    val c0_ddr4_s_axi_arid            = Input(Bits(4.W))
++    val c0_ddr4_s_axi_araddr          = Input(Bits(31.W))
++    val c0_ddr4_s_axi_arlen           = Input(Bits(8.W))
++    val c0_ddr4_s_axi_arsize          = Input(Bits(3.W))
++    val c0_ddr4_s_axi_arburst         = Input(Bits(2.W))
++    val c0_ddr4_s_axi_arlock          = Input(Bits(1.W))
++    val c0_ddr4_s_axi_arcache         = Input(Bits(4.W))
++    val c0_ddr4_s_axi_arprot          = Input(Bits(3.W))
++    val c0_ddr4_s_axi_arqos           = Input(Bits(4.W))
++    val c0_ddr4_s_axi_arvalid         = Input(Bool())
++    val c0_ddr4_s_axi_arready         = Output(Bool())
++    //slave interface read data ports
++    val c0_ddr4_s_axi_rready          = Input(Bool())
++    val c0_ddr4_s_axi_rid             = Output(Bits(4.W))
++    val c0_ddr4_s_axi_rdata           = Output(Bits(64.W))
++    val c0_ddr4_s_axi_rresp           = Output(Bits(2.W))
++    val c0_ddr4_s_axi_rlast           = Output(Bool())
++    val c0_ddr4_s_axi_rvalid          = Output(Bool())
++  })
++
++  ElaborationArtefacts.add(
++    "zcu106mig.vivado.tcl",
++    """ 
++      create_ip -vendor xilinx.com -library ip -version 2.2 -name ddr4 -module_name zcu106mig -dir $ipdir -force
++      set_property -dict [list \
++      CONFIG.AL_SEL                               {0} \
++      CONFIG.C0.ADDR_WIDTH                        {17} \
++      CONFIG.C0.BANK_GROUP_WIDTH                  {1} \
++      CONFIG.C0.CKE_WIDTH                         {1} \
++      CONFIG.C0.CK_WIDTH                          {1} \
++      CONFIG.C0.CS_WIDTH                          {1} \
++      CONFIG.C0.ControllerType                    {DDR4_SDRAM} \
++      CONFIG.C0.DDR4_AUTO_AP_COL_A3               {false} \
++      CONFIG.C0.DDR4_AutoPrecharge                {false} \
++      CONFIG.C0.DDR4_AxiAddressWidth              {31} \
++      CONFIG.C0.DDR4_AxiArbitrationScheme         {RD_PRI_REG} \
++      CONFIG.C0.DDR4_AxiDataWidth                 {64} \
++      CONFIG.C0.DDR4_AxiIDWidth                   {4} \
++      CONFIG.C0.DDR4_AxiNarrowBurst               {false} \
++      CONFIG.C0.DDR4_AxiSelection                 {true} \
++      CONFIG.C0.DDR4_BurstLength                  {8} \
++      CONFIG.C0.DDR4_BurstType                    {Sequential} \
++      CONFIG.C0.DDR4_CLKFBOUT_MULT                {5} \
++      CONFIG.C0.DDR4_CLKOUT0_DIVIDE               {5} \
++      CONFIG.C0.DDR4_Capacity                     {512} \
++      CONFIG.C0.DDR4_CasLatency                   {18} \
++      CONFIG.C0.DDR4_CasWriteLatency              {12} \
++      CONFIG.C0.DDR4_ChipSelect                   {true} \
++      CONFIG.C0.DDR4_Clamshell                    {false} \
++      CONFIG.C0.DDR4_CustomParts                  {no_file_loaded} \
++      CONFIG.C0.DDR4_DIVCLK_DIVIDE                {1} \
++      CONFIG.C0.DDR4_DataMask                     {DM_NO_DBI} \
++      CONFIG.C0.DDR4_DataWidth                    {64} \
++      CONFIG.C0.DDR4_Ecc                          {false} \
++      CONFIG.C0.DDR4_MCS_ECC                      {false} \
++      CONFIG.C0.DDR4_Mem_Add_Map                  {ROW_COLUMN_BANK} \
++      CONFIG.C0.DDR4_MemoryName                   {MainMemory} \
++      CONFIG.C0.DDR4_MemoryPart                   {MT40A256M16GE-075E} \
++      CONFIG.C0.DDR4_MemoryType                   {Components} \
++      CONFIG.C0.DDR4_MemoryVoltage                {1.2V} \
++      CONFIG.C0.DDR4_OnDieTermination             {RZQ/6} \
++      CONFIG.C0.DDR4_Ordering                     {Normal} \
++      CONFIG.C0.DDR4_OutputDriverImpedenceControl {RZQ/7} \
++      CONFIG.C0.DDR4_PhyClockRatio                {4:1} \
++      CONFIG.C0.DDR4_SAVE_RESTORE                 {false} \
++      CONFIG.C0.DDR4_SELF_REFRESH                 {false} \
++      CONFIG.C0.DDR4_Slot                         {Single} \
++      CONFIG.C0.DDR4_Specify_MandD                {true} \
++      CONFIG.C0.DDR4_TimePeriod                   {833} \
++      CONFIG.C0.DDR4_UserRefresh_ZQCS             {false} \
++      CONFIG.C0.DDR4_isCKEShared                  {false} \
++      CONFIG.C0.DDR4_isCustom                     {false} \
++      CONFIG.C0.LR_WIDTH                          {1} \
++      CONFIG.C0.ODT_WIDTH                         {1} \
++      CONFIG.C0.StackHeight                       {1} \
++      CONFIG.C0_CLOCK_BOARD_INTERFACE             {Custom} \
++      CONFIG.C0_DDR4_BOARD_INTERFACE              {Custom} \
++      CONFIG.DCI_Cascade                          {false} \
++      CONFIG.DIFF_TERM_SYSCLK                     {false} \
++      CONFIG.Debug_Signal                         {Disable} \
++      CONFIG.Default_Bank_Selections              {false} \
++      CONFIG.Enable_SysPorts                      {true} \
++      CONFIG.IOPowerReduction                     {OFF} \
++      CONFIG.IO_Power_Reduction                   {false} \
++      CONFIG.IS_FROM_PHY                          {1} \
++      CONFIG.MCS_DBG_EN                           {false} \
++      CONFIG.No_Controller                        {1} \
++      CONFIG.PARTIAL_RECONFIG_FLOW_MIG            {false} \
++      CONFIG.PING_PONG_PHY                        {1} \
++      CONFIG.Phy_Only                             {Complete_Memory_Controller} \
++      CONFIG.RECONFIG_XSDB_SAVE_RESTORE           {false} \
++      CONFIG.RESET_BOARD_INTERFACE                {Custom} \
++      CONFIG.Reference_Clock                      {Differential} \
++      CONFIG.SET_DW_TO_40                         {false} \
++      CONFIG.System_Clock                         {No_Buffer} \
++      CONFIG.TIMING_3DS                           {false} \
++      CONFIG.TIMING_OP1                           {false} \
++      CONFIG.TIMING_OP2                           {false} \
++      ] [get_ips zcu106mig]"""
++  )
++   
++}
++//scalastyle:on
+diff --git a/src/main/scala/shell/xilinx/PeripheralsZCU106Shell.scala b/src/main/scala/shell/xilinx/PeripheralsZCU106Shell.scala
+new file mode 100644
+index 0000000..a37e532
+--- /dev/null
++++ b/src/main/scala/shell/xilinx/PeripheralsZCU106Shell.scala
+@@ -0,0 +1,206 @@
++// See LICENSE for license details.
++package sifive.fpgashells.shell.xilinx
++
++import chisel3._
++import org.chipsalliance.cde.config._
++import freechips.rocketchip.diplomacy._
++import sifive.fpgashells.shell._
++import sifive.fpgashells.ip.xilinx._
++
++
++/*
++class SPIFlashVCUV18PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: SPIFlashDesignInput, val shellInput: SPIFlashShellInput)
++  extends SPIFlashXilinxPlacedOverlay(name, designInput, shellInput)
++{
++
++  shell { InModuleBody { 
++    /*val packagePinsWithPackageIOs = Seq(("AF13", IOPin(io.qspi_sck)),
++      ("AJ11", IOPin(io.qspi_cs)),
++      ("AP11", IOPin(io.qspi_dq(0))),
++      ("AN11", IOPin(io.qspi_dq(1))),
++      ("AM11", IOPin(io.qspi_dq(2))),
++      ("AL11", IOPin(io.qspi_dq(3))))
++
++    packagePinsWithPackageIOs foreach { case (pin, io) => {
++      shell.xdc.addPackagePin(io, pin)
++      shell.xdc.addIOStandard(io, "LVCMOS18")
++      shell.xdc.addIOB(io)
++    } }
++    packagePinsWithPackageIOs drop 1 foreach { case (pin, io) => {
++      shell.xdc.addPullup(io)
++    } }
++*/
++  } }
++}
++class SPIFlashZCU106ShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: SPIFlashShellInput)(implicit val valName: ValName)
++  extends SPIFlashShellPlacer[ZCU106ShellBasicOverlays] {
++  def place(designInput: SPIFlashDesignInput) = new SPIFlashZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++*/
++
++class UARTPeripheralZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: UARTDesignInput, val shellInput: UARTShellInput)
++  extends UARTXilinxPlacedOverlay(name, designInput, shellInput, true)
++{
++    shell { InModuleBody {
++    val uartLocations = List(List("AY25", "BB22", "AW25", "BB21"), List("AW11", "AP13", "AY10", "AR13")) //uart0 - USB, uart1 - FMC 105 debug card J20 p1-rx p2-tx p3-ctsn p4-rtsn
++    val packagePinsWithPackageIOs = Seq((uartLocations(shellInput.index)(0), IOPin(io.ctsn.get)),
++                                        (uartLocations(shellInput.index)(1), IOPin(io.rtsn.get)),
++                                        (uartLocations(shellInput.index)(2), IOPin(io.rxd)),
++                                        (uartLocations(shellInput.index)(3), IOPin(io.txd)))
++
++    packagePinsWithPackageIOs foreach { case (pin, io) => {
++      shell.xdc.addPackagePin(io, pin)
++      shell.xdc.addIOStandard(io, "LVCMOS18")
++      shell.xdc.addIOB(io)
++    } }
++  } }
++}
++
++class UARTPeripheralZCU106ShellPlacer(val shell: ZCU106ShellBasicOverlays, val shellInput: UARTShellInput)(implicit val valName: ValName)
++  extends UARTShellPlacer[ZCU106ShellBasicOverlays]
++{
++  def place(designInput: UARTDesignInput) = new UARTPeripheralZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++class I2CPeripheralZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: I2CDesignInput, val shellInput: I2CShellInput)
++  extends I2CXilinxPlacedOverlay(name, designInput, shellInput)
++{
++    shell { InModuleBody {
++    val i2cLocations = List(List("BA14", "AW12"), List("BB14", "AY12")) //i2c0: J1 p37-scl p38-sda i2c1: J2 p39-scl p40-sda
++    val packagePinsWithPackageIOs = Seq((i2cLocations(shellInput.index)(0), IOPin(io.scl)),
++                                        (i2cLocations(shellInput.index)(1), IOPin(io.sda)))
++
++    packagePinsWithPackageIOs foreach { case (pin, io) => {
++      shell.xdc.addPackagePin(io, pin)
++      shell.xdc.addIOStandard(io, "LVCMOS18")
++      shell.xdc.addIOB(io)
++    } }
++  } }
++}
++
++class I2CPeripheralZCU106ShellPlacer(val shell: ZCU106ShellBasicOverlays, val shellInput: I2CShellInput)(implicit val valName: ValName)
++  extends I2CShellPlacer[ZCU106ShellBasicOverlays]
++{
++  def place(designInput: I2CDesignInput) = new I2CPeripheralZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++class QSPIPeripheralZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: SPIFlashDesignInput, val shellInput: SPIFlashShellInput)
++  extends SPIFlashXilinxPlacedOverlay(name, designInput, shellInput)
++{
++    shell { InModuleBody {
++    val qspiLocations = List(List("AY9", "BB13", "BA9", "BB12", "BF10", "BA16")) //J1 pins 1-6 and 7-12 (sck, cs, dq0-3) 
++//FIX when built in spi flash is integrated
++    val packagePinsWithPackageIOs = Seq((qspiLocations(shellInput.index)(0), IOPin(io.qspi_sck)),
++                                        (qspiLocations(shellInput.index)(1), IOPin(io.qspi_cs)),
++                                        (qspiLocations(shellInput.index)(2), IOPin(io.qspi_dq(0))),
++                                        (qspiLocations(shellInput.index)(3), IOPin(io.qspi_dq(1))),
++                                        (qspiLocations(shellInput.index)(4), IOPin(io.qspi_dq(2))),
++                                        (qspiLocations(shellInput.index)(5), IOPin(io.qspi_dq(3))))
++
++    packagePinsWithPackageIOs foreach { case (pin, io) => {
++      shell.xdc.addPackagePin(io, pin)
++      shell.xdc.addIOStandard(io, "LVCMOS18")
++      shell.xdc.addIOB(io)
++    } }
++    packagePinsWithPackageIOs drop 1 foreach { case (pin, io) => {
++      shell.xdc.addPullup(io)
++    } }
++  } }
++}
++
++class QSPIPeripheralZCU106ShellPlacer(val shell: ZCU106ShellBasicOverlays, val shellInput: SPIFlashShellInput)(implicit val valName: ValName)
++  extends SPIFlashShellPlacer[ZCU106ShellBasicOverlays]
++{
++  def place(designInput: SPIFlashDesignInput) = new QSPIPeripheralZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++class GPIOPeripheralZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: GPIODesignInput, val shellInput: GPIOShellInput)
++  extends GPIOXilinxPlacedOverlay(name, designInput, shellInput)
++{
++    shell { InModuleBody {
++    val gpioLocations = List("AU11", "AT12", "AV11", "AU12", "AW13", "AK15", "AY13", "AL15", "AN16", "AL14", "AP16", "AM14", "BF9", "BA15", "BC11", "BC14") //J20 pins 5-16, J1 pins 7-10
++    val iosWithLocs = io.gpio.zip(gpioLocations)
++    val packagePinsWithPackageIOs = iosWithLocs.map { case (io, pin) => (pin, IOPin(io)) }
++    println(packagePinsWithPackageIOs)
++
++    packagePinsWithPackageIOs foreach { case (pin, io) => {
++      shell.xdc.addPackagePin(io, pin)
++      shell.xdc.addIOStandard(io, "LVCMOS18")
++      shell.xdc.addIOB(io)
++    } }
++  } }
++}
++
++class GPIOPeripheralZCU106ShellPlacer(val shell: ZCU106ShellBasicOverlays, val shellInput: GPIOShellInput)(implicit val valName: ValName)
++  extends GPIOShellPlacer[ZCU106ShellBasicOverlays] {
++
++  def place(designInput: GPIODesignInput) = new GPIOPeripheralZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++object PMODZCU106PinConstraints {
++  val pins = Seq(Seq("AY14","AV16","AY15","AU16","AW15","AT15","AV15","AT16"),
++                 Seq("N28","P29","M30","L31","N30","M31","P30","R29"))
++}
++class PMODZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: PMODDesignInput, val shellInput: PMODShellInput)
++  extends PMODXilinxPlacedOverlay(name, designInput, shellInput, packagePin = PMODZCU106PinConstraints.pins(shellInput.index), ioStandard = "LVCMOS18")
++class PMODZCU106ShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: PMODShellInput)(implicit val valName: ValName)
++  extends PMODShellPlacer[ZCU106ShellBasicOverlays] {
++  def place(designInput: PMODDesignInput) = new PMODZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++class PMODJTAGZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: JTAGDebugDesignInput, val shellInput: JTAGDebugShellInput)
++  extends JTAGDebugXilinxPlacedOverlay(name, designInput, shellInput)
++{
++  shell { InModuleBody {
++    shell.sdc.addClock("JTCK", IOPin(io.jtag_TCK), 10)
++    shell.sdc.addGroup(clocks = Seq("JTCK"))
++    shell.xdc.clockDedicatedRouteFalse(IOPin(io.jtag_TCK))
++    val packagePinsWithPackageIOs = Seq(("AW15", IOPin(io.jtag_TCK)),
++                                        ("AU16", IOPin(io.jtag_TMS)),
++                                        ("AV16", IOPin(io.jtag_TDI)),
++                                        ("AY14", IOPin(io.jtag_TDO)),
++                                        ("AY15", IOPin(io.srst_n))) 
++    packagePinsWithPackageIOs foreach { case (pin, io) => {
++      shell.xdc.addPackagePin(io, pin)
++      shell.xdc.addIOStandard(io, "LVCMOS18")
++      shell.xdc.addPullup(io)
++      shell.xdc.addIOB(io)
++    } }
++  } }
++}
++class PMODJTAGZCU106ShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: JTAGDebugShellInput)(implicit val valName: ValName)
++  extends JTAGDebugShellPlacer[ZCU106ShellBasicOverlays] {
++  def place(designInput: JTAGDebugDesignInput) = new PMODJTAGZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++abstract class PeripheralsZCU106Shell(implicit p: Parameters) extends ZCU106ShellBasicOverlays{
++  //val pmod_female      = Overlay(PMODOverlayKey, new PMODZCU106ShellPlacer(this, PMODShellInput(index = 0)))
++  val pmodJTAG = Overlay(JTAGDebugOverlayKey, new PMODJTAGZCU106ShellPlacer(this, JTAGDebugShellInput()))
++  val gpio           = Overlay(GPIOOverlayKey,       new GPIOPeripheralZCU106ShellPlacer(this, GPIOShellInput()))
++  val uart  = Seq.tabulate(2) { i => Overlay(UARTOverlayKey, new UARTPeripheralZCU106ShellPlacer(this, UARTShellInput(index = i))(valName = ValName(s"uart$i"))) }
++  val qspi      = Seq.tabulate(0) { i => Overlay(SPIFlashOverlayKey, new QSPIPeripheralZCU106ShellPlacer(this, SPIFlashShellInput(index = i))(valName = ValName(s"qspi$i"))) }
++  val i2c       = Seq.tabulate(2) { i => Overlay(I2COverlayKey, new I2CPeripheralZCU106ShellPlacer(this, I2CShellInput(index = i))(valName = ValName(s"i2c$i"))) }
++
++  val topDesign = LazyModule(p(DesignKey)(designParameters))
++  p(ClockInputOverlayKey).foreach(_.place(ClockInputDesignInput()))
++
++  override lazy val module = new LazyRawModuleImp(this) {
++    val reset = IO(Input(Bool()))
++    val por_clock = sys_clock.get.get.asInstanceOf[SysClockZCU106PlacedOverlay].clock
++    val powerOnReset = PowerOnResetFPGAOnly(por_clock)
++
++    xdc.addPackagePin(reset, "L19")
++    xdc.addIOStandard(reset, "LVCMOS12")
++
++    val reset_ibuf = Module(new IBUF)
++    reset_ibuf.io.I := reset
++
++    sdc.addAsyncPath(Seq(powerOnReset))
++
++    val ereset: Bool = chiplink.get() match {
++      case Some(x: ChipLinkZCU106PlacedOverlay) => !x.ereset_n
++      case _ => false.B
++    }
++   pllReset := reset_ibuf.io.O || powerOnReset || ereset
++  }
++}
+diff --git a/src/main/scala/shell/xilinx/ZCU106NewShell.scala b/src/main/scala/shell/xilinx/ZCU106NewShell.scala
+new file mode 100644
+index 0000000..c63573b
+--- /dev/null
++++ b/src/main/scala/shell/xilinx/ZCU106NewShell.scala
+@@ -0,0 +1,545 @@
++// See LICENSE for license details.
++package sifive.fpgashells.shell.xilinx
++
++import chisel3._
++import chisel3.experimental.{attach, Analog}
++import chisel3.experimental.dataview._
++import org.chipsalliance.cde.config._
++import freechips.rocketchip.diplomacy._
++import freechips.rocketchip.tilelink._
++import freechips.rocketchip.util.SyncResetSynchronizerShiftReg
++import freechips.rocketchip.prci._
++import sifive.fpgashells.clocks._
++import sifive.fpgashells.shell._
++import sifive.fpgashells.ip.xilinx._
++import sifive.fpgashells.ip.xilinx.zcu106mig._
++import sifive.blocks.devices.chiplink._
++import sifive.fpgashells.devices.xilinx.xilinxzcu106mig._
++import sifive.fpgashells.devices.xilinx.xdma._
++import sifive.fpgashells.ip.xilinx.xxv_ethernet._
++
++class SysClockZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: ClockInputDesignInput, val shellInput: ClockInputShellInput)
++  extends LVDSClockInputXilinxPlacedOverlay(name, designInput, shellInput)
++{
++  val node = shell { ClockSourceNode(freqMHz = 300, jitterPS = 50)(ValName(name)) }
++
++  shell { InModuleBody {
++    shell.xdc.addPackagePin(io.p, "AH12")
++    shell.xdc.addPackagePin(io.n, "AJ12")
++    shell.xdc.addIOStandard(io.p, "DIFF_SSTL12")
++    shell.xdc.addIOStandard(io.n, "DIFF_SSTL12")
++  } }
++}
++class SysClockZCU106ShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: ClockInputShellInput)(implicit val valName: ValName)
++  extends ClockInputShellPlacer[ZCU106ShellBasicOverlays]
++{
++    def place(designInput: ClockInputDesignInput) = new SysClockZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++class RefClockZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: ClockInputDesignInput, val shellInput: ClockInputShellInput)
++  extends LVDSClockInputXilinxPlacedOverlay(name, designInput, shellInput) {
++  val node = shell { ClockSourceNode(freqMHz = 125, jitterPS = 50)(ValName(name)) }
++
++  shell { InModuleBody {
++    shell.xdc.addPackagePin(io.p, "H9")
++    shell.xdc.addPackagePin(io.n, "G9")
++    shell.xdc.addIOStandard(io.p, "LVDS_25")
++    shell.xdc.addIOStandard(io.n, "LVDS_25")
++  } }
++}
++class RefClockZCU106ShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: ClockInputShellInput)(implicit val valName: ValName)
++  extends ClockInputShellPlacer[ZCU106ShellBasicOverlays] {
++  def place(designInput: ClockInputDesignInput) = new RefClockZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++class SDIOZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: SPIDesignInput, val shellInput: SPIShellInput)
++  extends SDIOXilinxPlacedOverlay(name, designInput, shellInput)
++{
++  shell { InModuleBody {
++    val packagePinsWithPackageIOs = Seq(("E20", IOPin(io.spi_clk)),
++                                        ("A23", IOPin(io.spi_cs)),
++                                        ("F25", IOPin(io.spi_dat(0))),
++                                        ("K24", IOPin(io.spi_dat(1))),
++                                        ("L23", IOPin(io.spi_dat(2))),
++                                        ("B23", IOPin(io.spi_dat(3))))
++
++    packagePinsWithPackageIOs foreach { case (pin, io) => {
++      shell.xdc.addPackagePin(io, pin)
++      shell.xdc.addIOStandard(io, "LVCMOS18")
++    } }
++    packagePinsWithPackageIOs drop 1 foreach { case (pin, io) => {
++      shell.xdc.addPullup(io)
++      shell.xdc.addIOB(io)
++    } }
++  } }
++}
++class SDIOZCU106ShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: SPIShellInput)(implicit val valName: ValName)
++  extends SPIShellPlacer[ZCU106ShellBasicOverlays] {
++  def place(designInput: SPIDesignInput) = new SDIOZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++class SPIFlashZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: SPIFlashDesignInput, val shellInput: SPIFlashShellInput)
++  extends SPIFlashXilinxPlacedOverlay(name, designInput, shellInput)
++{
++
++  shell { InModuleBody {
++    /*val packagePinsWithPackageIOs = Seq(("AF13", IOPin(io.qspi_sck)),
++      ("AJ11", IOPin(io.qspi_cs)),
++      ("AP11", IOPin(io.qspi_dq(0))),
++      ("AN11", IOPin(io.qspi_dq(1))),
++      ("AM11", IOPin(io.qspi_dq(2))),
++      ("AL11", IOPin(io.qspi_dq(3))))
++
++    packagePinsWithPackageIOs foreach { case (pin, io) => {
++      shell.xdc.addPackagePin(io, pin)
++      shell.xdc.addIOStandard(io, "LVCMOS18")
++      shell.xdc.addIOB(io)
++    } }
++    packagePinsWithPackageIOs drop 1 foreach { case (pin, io) => {
++      shell.xdc.addPullup(io)
++    } }
++*/
++  } }
++}
++class SPIFlashZCU106ShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: SPIFlashShellInput)(implicit val valName: ValName)
++  extends SPIFlashShellPlacer[ZCU106ShellBasicOverlays] {
++  def place(designInput: SPIFlashDesignInput) = new SPIFlashZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++class UARTZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: UARTDesignInput, val shellInput: UARTShellInput)
++  extends UARTXilinxPlacedOverlay(name, designInput, shellInput, true)
++{
++  shell { InModuleBody {
++    val packagePinsWithPackageIOs = Seq(("AP17", IOPin(io.ctsn.get)),
++                                        ("AM15", IOPin(io.rtsn.get)),
++                                        ("AH17", IOPin(io.rxd)),
++                                        ("AL17", IOPin(io.txd)))
++
++    packagePinsWithPackageIOs foreach { case (pin, io) => {
++      shell.xdc.addPackagePin(io, pin)
++      shell.xdc.addIOStandard(io, "LVCMOS12")
++      shell.xdc.addIOB(io)
++    } }
++  } }
++}
++class UARTZCU106ShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: UARTShellInput)(implicit val valName: ValName)
++  extends UARTShellPlacer[ZCU106ShellBasicOverlays] {
++  def place(designInput: UARTDesignInput) = new UARTZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++// class QSFP1ZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: EthernetDesignInput, val shellInput: EthernetShellInput)
++//   extends EthernetUltraScalePlacedOverlay(name, designInput, shellInput, XXVEthernetParams(name = name, speed   = 10, dclkMHz = 125))
++// {
++//   val dclkSource = shell { BundleBridgeSource(() => Clock()) }
++//   val dclkSink = dclkSource.makeSink()
++//   InModuleBody {
++//     dclk := dclkSink.bundle
++//   }
++//   shell { InModuleBody {
++//     dclkSource.bundle := shell.ref_clock.get.get.overlayOutput.node.out(0)._1.clock
++//     shell.xdc.addPackagePin(io.tx_p, "Y4")
++//     shell.xdc.addPackagePin(io.tx_n, "Y3")
++//     shell.xdc.addPackagePin(io.rx_p, "AA2")
++//     shell.xdc.addPackagePin(io.rx_n, "AA1")
++//     shell.xdc.addPackagePin(io.refclk_p, "H11")
++//     shell.xdc.addPackagePin(io.refclk_n, "G11")
++//   } }
++// }
++
++// class QSFP1ZCU106ShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: EthernetShellInput)(implicit val valName: ValName)
++//   extends EthernetShellPlacer[ZCU106ShellBasicOverlays] {
++//   def place(designInput: EthernetDesignInput) = new QSFP1ZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++// }
++
++// class QSFP2ZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: EthernetDesignInput, val shellInput: EthernetShellInput)
++//   extends EthernetUltraScalePlacedOverlay(name, designInput, shellInput, XXVEthernetParams(name = name, speed   = 10, dclkMHz = 125))
++// {
++//   val dclkSource = shell { BundleBridgeSource(() => Clock()) }
++//   val dclkSink = dclkSource.makeSink()
++//   InModuleBody {
++//     dclk := dclkSink.bundle
++//   }
++//   shell { InModuleBody {
++//     dclkSource.bundle := shell.ref_clock.get.get.overlayOutput.node.out(0)._1.clock
++//     shell.xdc.addPackagePin(io.tx_p, "W6")
++//     shell.xdc.addPackagePin(io.tx_n, "W5")
++//     shell.xdc.addPackagePin(io.rx_p, "W2")
++//     shell.xdc.addPackagePin(io.rx_n, "W1")
++//     shell.xdc.addPackagePin(io.refclk_p, "H11")
++//     shell.xdc.addPackagePin(io.refclk_n, "G11")
++//   } }
++// }
++// class QSFP2ZCU106ShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: EthernetShellInput)(implicit val valName: ValName)
++//   extends EthernetShellPlacer[ZCU106ShellBasicOverlays] {
++//   def place(designInput: EthernetDesignInput) = new QSFP2ZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++// }
++
++object LEDZCU106PinConstraints {
++  val pins = Seq("AL11", "AL13", "AK13", "AE15", "AM8", "AM9", "AM10", "AM11")
++}
++class LEDZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: LEDDesignInput, val shellInput: LEDShellInput)
++  extends LEDXilinxPlacedOverlay(name, designInput, shellInput, packagePin = Some(LEDZCU106PinConstraints.pins(shellInput.number)), ioStandard = "LVCMOS12")
++class LEDZCU106ShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: LEDShellInput)(implicit val valName: ValName)
++  extends LEDShellPlacer[ZCU106ShellBasicOverlays] {
++  def place(designInput: LEDDesignInput) = new LEDZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++object ButtonZCU106PinConstraints {
++  val pins = Seq("AG13", "AC14", "AK12", "AP20", "AL20")
++}
++class ButtonZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: ButtonDesignInput, val shellInput: ButtonShellInput)
++  extends ButtonXilinxPlacedOverlay(name, designInput, shellInput, packagePin = Some(ButtonZCU106PinConstraints.pins(shellInput.number)), ioStandard = "LVCMOS18")
++class ButtonZCU106ShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: ButtonShellInput)(implicit val valName: ValName)
++  extends ButtonShellPlacer[ZCU106ShellBasicOverlays] {
++  def place(designInput: ButtonDesignInput) = new ButtonZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++object SwitchZCU106PinConstraints {
++  val pins = Seq("A17", "A16", "B16", "B15", "A15", "A14", "B14", "B13")
++}
++class SwitchZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: SwitchDesignInput, val shellInput: SwitchShellInput)
++  extends SwitchXilinxPlacedOverlay(name, designInput, shellInput, packagePin = Some(SwitchZCU106PinConstraints.pins(shellInput.number)), ioStandard = "LVCMOS18")
++class SwitchZCU106ShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: SwitchShellInput)(implicit val valName: ValName)
++  extends SwitchShellPlacer[ZCU106ShellBasicOverlays] {
++  def place(designInput: SwitchDesignInput) = new SwitchZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++class ChipLinkZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: ChipLinkDesignInput, val shellInput: ChipLinkShellInput)
++  extends ChipLinkXilinxPlacedOverlay(name, designInput, shellInput, rxPhase= -120, txPhase= -90, rxMargin=0.6, txMargin=0.5)
++{
++  val ereset_n = shell { InModuleBody {
++    val ereset_n = IO(Analog(1.W))
++    ereset_n.suggestName("ereset_n")
++    val pin = IOPin(ereset_n, 0)
++    shell.xdc.addPackagePin(pin, "E23")
++    shell.xdc.addIOStandard(pin, "LVDS")
++    shell.xdc.addTermination(pin, "NONE")
++    shell.xdc.addPullup(pin)
++
++    val iobuf = Module(new IOBUF)
++    iobuf.suggestName("chiplink_ereset_iobuf")
++    attach(ereset_n, iobuf.io.IO)
++    iobuf.io.T := true.B // !oe
++    iobuf.io.I := false.B
++
++    iobuf.io.O
++  } }
++
++  shell { InModuleBody {
++    val dir1 = Seq("F23", "C19", "C18", /* clk, rst, send */
++      "B18",  "B19",  "E24", "D24",
++      "BC11", "BD11", "BD12", "BE12", // FIXME
++                   "BF12", "BF11", "BE14", "BF14", "BD13", "BE13", "BC15", "BD15",
++                   "BE15", "BF15", "BA14", "BB14", "BB13", "BB12", "BA16", "BA15",
++                   "BC14", "BC13", "AY8",  "AY7",  "AW8",  "AW7",  "BB16", "BC16")
++    val dir2 = Seq("AV14", "AK13", "AK14", /* clk, rst, send */
++                   "AR14", "AT14", "AP12", "AR12", "AW12", "AY12", "AW11", "AY10",
++                   "AU11", "AV11", "AW13", "AY13", "AN16", "AP16", "AP13", "AR13",
++                   "AT12", "AU12", "AK15", "AL15", "AL14", "AM14", "AV10", "AW10",
++                   "AN15", "AP15", "AK12", "AL12", "AM13", "AM12", "AJ13", "AJ12")
++    (IOPin.of(io.b2c) zip dir1) foreach { case (io, pin) => shell.xdc.addPackagePin(io, pin) }
++    (IOPin.of(io.c2b) zip dir2) foreach { case (io, pin) => shell.xdc.addPackagePin(io, pin) }
++  } }
++}
++class ChipLinkZCU106ShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: ChipLinkShellInput)(implicit val valName: ValName)
++  extends ChipLinkShellPlacer[ZCU106ShellBasicOverlays] {
++  def place(designInput: ChipLinkDesignInput) = new ChipLinkZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++// TODO: JTAG is untested
++class JTAGDebugZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: JTAGDebugDesignInput, val shellInput: JTAGDebugShellInput)
++  extends JTAGDebugXilinxPlacedOverlay(name, designInput, shellInput)
++{
++  shell { InModuleBody {
++    val pin_locations = Map(
++      "PMOD_J55" -> Seq( "F25",        "L23",       "K24",       "B23",       "A23"),
++      "PMOD_J87" -> Seq("AP11",       "AP10",       "AP9",       "AN8",       "AN9"),
++      "FMC_J5"   -> Seq(  "D9",        "K10",       "J10",        "E7",        "C9"))
++    val pins      = Seq(io.jtag_TCK, io.jtag_TMS, io.jtag_TDI, io.jtag_TDO, io.srst_n)
++
++    shell.sdc.addClock("JTCK", IOPin(io.jtag_TCK), 10)
++    shell.sdc.addGroup(clocks = Seq("JTCK"))
++    shell.xdc.clockDedicatedRouteFalse(IOPin(io.jtag_TCK))
++
++    // val pin_voltage:String = if(shellInput.location.get == "PMOD_J53") "LVCMOS12" else "LVCMOS18"
++    val pin_voltage:String = "LVCMOS18"
++
++    (pin_locations(shellInput.location.get) zip pins) foreach { case (pin_location, ioport) =>
++      val io = IOPin(ioport)
++      shell.xdc.addPackagePin(io, pin_location)
++      shell.xdc.addIOStandard(io, pin_voltage)
++      shell.xdc.addPullup(io)
++      shell.xdc.addIOB(io)
++    }
++  } }
++}
++class JTAGDebugZCU106ShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: JTAGDebugShellInput)(implicit val valName: ValName)
++  extends JTAGDebugShellPlacer[ZCU106ShellBasicOverlays] {
++  def place(designInput: JTAGDebugDesignInput) = new JTAGDebugZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++class cJTAGDebugZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: cJTAGDebugDesignInput, val shellInput: cJTAGDebugShellInput)
++  extends cJTAGDebugXilinxPlacedOverlay(name, designInput, shellInput)
++{
++  shell { InModuleBody {
++    shell.sdc.addClock("JTCKC", IOPin(io.cjtag_TCKC), 10)
++    shell.sdc.addGroup(clocks = Seq("JTCKC"))
++    shell.xdc.clockDedicatedRouteFalse(IOPin(io.cjtag_TCKC))
++    val packagePinsWithPackageIOs = Seq(("F12", IOPin(io.cjtag_TCKC)),
++                                        ( "B6", IOPin(io.cjtag_TMSC)),
++                                        ("E12", IOPin(io.srst_n)))
++
++    packagePinsWithPackageIOs foreach { case (pin, io) => {
++      shell.xdc.addPackagePin(io, pin)
++      shell.xdc.addIOStandard(io, "LVCMOS18")
++    } }
++      shell.xdc.addPullup(IOPin(io.cjtag_TCKC))
++      shell.xdc.addPullup(IOPin(io.srst_n))
++  } }
++}
++class cJTAGDebugZCU106ShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: cJTAGDebugShellInput)(implicit val valName: ValName)
++  extends cJTAGDebugShellPlacer[ZCU106ShellBasicOverlays] {
++  def place(designInput: cJTAGDebugDesignInput) = new cJTAGDebugZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++class JTAGDebugBScanZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: JTAGDebugBScanDesignInput, val shellInput: JTAGDebugBScanShellInput)
++  extends JTAGDebugBScanXilinxPlacedOverlay(name, designInput, shellInput)
++class JTAGDebugBScanZCU106ShellPlacer(val shell: ZCU106ShellBasicOverlays, val shellInput: JTAGDebugBScanShellInput)(implicit val valName: ValName)
++  extends JTAGDebugBScanShellPlacer[ZCU106ShellBasicOverlays] {
++  def place(designInput: JTAGDebugBScanDesignInput) = new JTAGDebugBScanZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++case object ZCU106DDRSize extends Field[BigInt](0x40000000L * 2) // 2GB
++class DDRZCU106PlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: DDRDesignInput, val shellInput: DDRShellInput)
++  extends DDRPlacedOverlay[XilinxZCU106MIGPads](name, designInput, shellInput)
++{
++  val size = p(ZCU106DDRSize)
++
++  val migParams = XilinxZCU106MIGParams(address = AddressSet.misaligned(di.baseAddress, size))
++  val mig = LazyModule(new XilinxZCU106MIG(migParams))
++  val ddrUI     = shell { ClockSourceNode(freqMHz = 200) }
++  val areset    = shell { ClockSinkNode(Seq(ClockSinkParameters())) }
++  areset := designInput.wrangler := ddrUI
++
++  def overlayOutput = DDROverlayOutput(ddr = mig.node)
++  def ioFactory = new XilinxZCU106MIGPads(size)
++
++  shell { InModuleBody {
++    require (shell.sys_clock.get.isDefined, "Use of DDRZCU106Overlay depends on SysClockZCU106Overlay")
++    val (sys, _) = shell.sys_clock.get.get.overlayOutput.node.out(0)
++    val (ui, _) = ddrUI.out(0)
++    val (ar, _) = areset.in(0)
++    val port = mig.module.io.port
++    io <> port.viewAsSupertype(new ZCU106MIGIODDR(mig.depth))
++    ui.clock := port.c0_ddr4_ui_clk
++    ui.reset := /*!port.mmcm_locked ||*/ port.c0_ddr4_ui_clk_sync_rst
++    port.c0_sys_clk_i := sys.clock.asUInt
++    port.sys_rst := sys.reset // pllReset
++    port.c0_ddr4_aresetn := !(ar.reset.asBool)
++
++    val allddrpins = Seq(       "AK9", "AG11", "AJ10", "AL8", "AK10", "AH8", "AJ9", "AG8", "AH9", "AG10", "AH13", "AG9", "AM13", "AF8", // addr[0-13]
++      "AC12", "AE12", "AF11", "AE14", // we_n, cas_n, ras_n, bg
++      "AK8", "AL12", // ba[0->1]
++      "AF12", "AD14", "AJ11", "AH11", "AB13", "AD12", "AF10", // reset_n, act_n, ck_c, ck_t, cke, cs_n, odt
++
++      "AF16", "AF18", "AG15", "AF17", "AF15", "AG18", "AG14", "AE17", "AA14", "AC16", "AB15", "AD16", "AB16", "AC17", "AB14", "AD17", // dq[0->15]
++      "AJ16", "AJ17", "AL15", "AK17", "AJ15", "AK18", "AL16", "AL18", "AP13", "AP16", "AP15", "AN16", "AN13", "AM18", "AN17", "AN18", // dq[16->31]
++      "AB19", "AD19", "AC18", "AC19", "AA20", "AE20", "AA19", "AD20", "AF22", "AH21", "AG19", "AG21", "AE24", "AG20", "AE23", "AF21", // dq[32->47]
++      "AL22", "AJ22", "AL23", "AJ21", "AK20", "AJ19", "AK19", "AJ20", "AP22", "AN22", "AP21", "AP23", "AM19", "AM23", "AN19", "AN23", // dq[48->63]
++      "AJ14", "AA15", "AK14", "AN14", "AB18", "AG23", "AK23", "AN21", // dqs_c[0->7]
++      "AH14", "AA16", "AK15", "AM14", "AA18", "AF23", "AK22", "AM21", // dqs_t[0->7]
++      "AH18", "AD15", "AM16", "AP18", "AE18", "AH22", "AL20", "AP19")  // dm_dbi_n[n]
++
++    // "D14", "B15", "B16", "C14", "C15", "A13", "A14",
++    //   "A15", "A16", "B12", "C12", "B13", "C13", "D15", "H14", "H15", "F15",
++    //   "H13", "G15", "G13", "N20", "E13", "E14", "F14", "A10", "F13", "C8",
++    //   "F11", "E11", "F10", "F9",  "H12", "G12", "E9",  "D9",  "R19", "P19",
++    //   "M18", "M17", "N19", "N18", "N17", "M16", "L16", "K16", "L18", "K18",
++    //   "J17", "H17", "H19", "H18", "F19", "F18", "E19", "E18", "G20", "F20",
++    //   "E17", "D16", "D17", "C17", "C19", "C18", "D20", "D19", "C20", "B20",
++    //   "N23", "M23", "R21", "P21", "R22", "P22", "T23", "R23", "K24", "J24",
++    //   "M21", "L21", "K21", "J21", "K22", "J22", "H23", "H22", "E23", "E22",
++    //   "F21", "E21", "F24", "F23", "D10", "P16", "J19", "E16", "A18", "M22",
++    //   "L20", "G23", "D11", "P17", "K19", "F16", "A19", "N22", "M20", "H24",
++    //   "G11", "R18", "K17", "G18", "B18", "P20", "L23", "G22")
++
++    (IOPin.of(io) zip allddrpins) foreach { case (io, pin) => shell.xdc.addPackagePin(io, pin) }
++  } }
++
++  shell.sdc.addGroup(pins = Seq(mig.island.module.blackbox.io.c0_ddr4_ui_clk))
++}
++class DDRZCU106ShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: DDRShellInput)(implicit val valName: ValName)
++  extends DDRShellPlacer[ZCU106ShellBasicOverlays] {
++  def place(designInput: DDRDesignInput) = new DDRZCU106PlacedOverlay(shell, valName.name, designInput, shellInput)
++}
++
++// class PCIeZCU106FMCPlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: PCIeDesignInput, val shellInput: PCIeShellInput)
++//   extends PCIeUltraScalePlacedOverlay(name, designInput, shellInput, XDMAParams(
++//     name     = "fmc_xdma",
++//     location = "X0Y3",
++//     bars     = designInput.bars,
++//     control  = designInput.ecam,
++//     bases    = designInput.bases,
++//     lanes    = 4))
++// {
++//   shell { InModuleBody {
++//     // Work-around incorrectly pre-assigned pins
++//     IOPin.of(io).foreach { shell.xdc.addPackagePin(_, "") }
++
++//     // We need some way to connect both of these to reach x8
++//     val ref126 = Seq("V38",  "V39")  /* [pn] GBT0 Bank 126 */
++//     val ref121 = Seq("AK38", "AK39") /* [pn] GBT0 Bank 121 */
++//     val ref = ref126
++
++//     // Bank 126 (DP5, DP6, DP4, DP7), Bank 121 (DP3, DP2, DP1, DP0)
++//     val rxp = Seq("U45", "R45", "W45", "N45", "AJ45", "AL45", "AN45", "AR45") /* [0-7] */
++//     val rxn = Seq("U46", "R46", "W46", "N46", "AJ46", "AL46", "AN46", "AR46") /* [0-7] */
++//     val txp = Seq("P42", "M42", "T42", "K42", "AL40", "AM42", "AP42", "AT42") /* [0-7] */
++//     val txn = Seq("P43", "M43", "T43", "K43", "AL41", "AM43", "AP43", "AT43") /* [0-7] */
++
++//     def bind(io: Seq[IOPin], pad: Seq[String]) {
++//       (io zip pad) foreach { case (io, pad) => shell.xdc.addPackagePin(io, pad) }
++//     }
++
++//     bind(IOPin.of(io.refclk), ref)
++//     // We do these individually so that zip falls off the end of the lanes:
++//     bind(IOPin.of(io.lanes.pci_exp_txp), txp)
++//     bind(IOPin.of(io.lanes.pci_exp_txn), txn)
++//     bind(IOPin.of(io.lanes.pci_exp_rxp), rxp)
++//     bind(IOPin.of(io.lanes.pci_exp_rxn), rxn)
++//   } }
++// }
++// class PCIeZCU106FMCShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: PCIeShellInput)(implicit val valName: ValName)
++//   extends PCIeShellPlacer[ZCU106ShellBasicOverlays] {
++//   def place(designInput: PCIeDesignInput) = new PCIeZCU106FMCPlacedOverlay(shell, valName.name, designInput, shellInput)
++// }
++
++// class PCIeZCU106EdgePlacedOverlay(val shell: ZCU106ShellBasicOverlays, name: String, val designInput: PCIeDesignInput, val shellInput: PCIeShellInput)
++//   extends PCIeUltraScalePlacedOverlay(name, designInput, shellInput, XDMAParams(
++//     name     = "edge_xdma",
++//     location = "X1Y2",
++//     bars     = designInput.bars,
++//     control  = designInput.ecam,
++//     bases    = designInput.bases,
++//     lanes    = 8))
++// {
++//   shell { InModuleBody {
++//     // Work-around incorrectly pre-assigned pins
++//     IOPin.of(io).foreach { shell.xdc.addPackagePin(_, "") }
++
++//     // PCIe Edge connector U2
++//     //   Lanes 00-03 Bank 227
++//     //   Lanes 04-07 Bank 226
++//     //   Lanes 08-11 Bank 225
++//     //   Lanes 12-15 Bank 224
++
++//     // FMC+ J22
++//     val ref227 = Seq("AC9", "AC8")  /* [pn]  Bank 227 PCIE_CLK2_*/
++//     val ref = ref227
++
++//     // PCIe Edge connector U2 : Bank 227, 226
++//     val rxp = Seq("AA4", "AB2", "AC4", "AD2", "AE4", "AF2", "AG4", "AH2") // [0-7]
++//     val rxn = Seq("AA3", "AB1", "AC3", "AD1", "AE3", "AF1", "AG3", "AH1") // [0-7]
++//     val txp = Seq("Y7", "AB7", "AD7", "AF7", "AH7", "AK7", "AM7", "AN5") // [0-7]
++//     val txn = Seq("Y6", "AB6", "AD6", "AF6", "AH6", "AK6", "AM6", "AN4") // [0-7]
++
++//     def bind(io: Seq[IOPin], pad: Seq[String]) {
++//       (io zip pad) foreach { case (io, pad) => shell.xdc.addPackagePin(io, pad) }
++//     }
++
++//     bind(IOPin.of(io.refclk), ref)
++//     // We do these individually so that zip falls off the end of the lanes:
++//     bind(IOPin.of(io.lanes.pci_exp_txp), txp)
++//     bind(IOPin.of(io.lanes.pci_exp_txn), txn)
++//     bind(IOPin.of(io.lanes.pci_exp_rxp), rxp)
++//     bind(IOPin.of(io.lanes.pci_exp_rxn), rxn)
++//   } }
++// }
++// class PCIeZCU106EdgeShellPlacer(shell: ZCU106ShellBasicOverlays, val shellInput: PCIeShellInput)(implicit val valName: ValName)
++//   extends PCIeShellPlacer[ZCU106ShellBasicOverlays] {
++//   def place(designInput: PCIeDesignInput) = new PCIeZCU106EdgePlacedOverlay(shell, valName.name, designInput, shellInput)
++// }
++
++abstract class ZCU106ShellBasicOverlays()(implicit p: Parameters) extends UltraScaleShell{
++  // PLL reset causes
++  val pllReset = InModuleBody { Wire(Bool()) }
++
++  val sys_clock = Overlay(ClockInputOverlayKey, new SysClockZCU106ShellPlacer(this, ClockInputShellInput()))
++  val ref_clock = Overlay(ClockInputOverlayKey, new RefClockZCU106ShellPlacer(this, ClockInputShellInput()))
++  val led       = Seq.tabulate(8)(i => Overlay(LEDOverlayKey, new LEDZCU106ShellPlacer(this, LEDShellInput(color = "red", number = i))(valName = ValName(s"led_$i"))))
++  val switch    = Seq.tabulate(4)(i => Overlay(SwitchOverlayKey, new SwitchZCU106ShellPlacer(this, SwitchShellInput(number = i))(valName = ValName(s"switch_$i"))))
++  val button    = Seq.tabulate(5)(i => Overlay(ButtonOverlayKey, new ButtonZCU106ShellPlacer(this, ButtonShellInput(number = i))(valName = ValName(s"button_$i"))))
++  val ddr       = Overlay(DDROverlayKey, new DDRZCU106ShellPlacer(this, DDRShellInput()))
++  // val qsfp1     = Overlay(EthernetOverlayKey, new QSFP1ZCU106ShellPlacer(this, EthernetShellInput()))
++  // val qsfp2     = Overlay(EthernetOverlayKey, new QSFP2ZCU106ShellPlacer(this, EthernetShellInput()))
++  val chiplink  = Overlay(ChipLinkOverlayKey, new ChipLinkZCU106ShellPlacer(this, ChipLinkShellInput()))
++  //val spi_flash = Overlay(SPIFlashOverlayKey, new SPIFlashZCU106ShellPlacer(this, SPIFlashShellInput()))
++  //SPI Flash not functional
++}
++
++case object ZCU106ShellPMOD extends Field[String]("JTAG")
++case object ZCU106ShellPMOD2 extends Field[String]("JTAG")
++
++class WithZCU106ShellPMOD(device: String) extends Config((site, here, up) => {
++  case ZCU106ShellPMOD => device
++})
++
++// Change JTAG pinouts to ZCU106 J53
++// Due to the level shifter is from 1.2V to 3.3V, the frequency of JTAG should be slow down to 1Mhz
++class WithZCU106ShellPMOD2(device: String) extends Config((site, here, up) => {
++  case ZCU106ShellPMOD2 => device
++})
++
++class WithZCU106ShellPMODJTAG extends WithZCU106ShellPMOD("JTAG")
++class WithZCU106ShellPMODSDIO extends WithZCU106ShellPMOD("SDIO")
++
++// Reassign JTAG pinouts location to PMOD J55
++class WithZCU106ShellPMOD2JTAG extends WithZCU106ShellPMOD2("PMODJ55_JTAG")
++
++class ZCU106Shell()(implicit p: Parameters) extends ZCU106ShellBasicOverlays
++{
++  val pmod_is_sdio  = p(ZCU106ShellPMOD) == "SDIO"
++  val pmod_j87_is_jtag = p(ZCU106ShellPMOD2) == "PMODJ87_JTAG"
++  val jtag_location = Some(if (pmod_is_sdio) (if (pmod_j87_is_jtag) "PMOD_J87" else "FMC_J5") else "PMOD_J55")
++
++  // Order matters; ddr depends on sys_clock
++  val uart      = Overlay(UARTOverlayKey, new UARTZCU106ShellPlacer(this, UARTShellInput()))
++  val sdio      = if (pmod_is_sdio) Some(Overlay(SPIOverlayKey, new SDIOZCU106ShellPlacer(this, SPIShellInput()))) else None
++  val jtag      = Overlay(JTAGDebugOverlayKey, new JTAGDebugZCU106ShellPlacer(this, JTAGDebugShellInput(location = jtag_location)))
++  val cjtag     = Overlay(cJTAGDebugOverlayKey, new cJTAGDebugZCU106ShellPlacer(this, cJTAGDebugShellInput()))
++  val jtagBScan = Overlay(JTAGDebugBScanOverlayKey, new JTAGDebugBScanZCU106ShellPlacer(this, JTAGDebugBScanShellInput()))
++  // val fmc       = Overlay(PCIeOverlayKey, new PCIeZCU106FMCShellPlacer(this, PCIeShellInput()))
++  // val edge      = Overlay(PCIeOverlayKey, new PCIeZCU106EdgeShellPlacer(this, PCIeShellInput()))
++
++  val topDesign = LazyModule(p(DesignKey)(designParameters))
++
++  // Place the sys_clock at the Shell if the user didn't ask for it
++  designParameters(ClockInputOverlayKey).foreach { unused =>
++    val source = unused.place(ClockInputDesignInput()).overlayOutput.node
++    val sink = ClockSinkNode(Seq(ClockSinkParameters()))
++    sink := source
++  }
++
++  override lazy val module = new LazyRawModuleImp(this) {
++    val reset = IO(Input(Bool()))
++    xdc.addPackagePin(reset, "L19")
++    xdc.addIOStandard(reset, "LVCMOS12")
++
++    val reset_ibuf = Module(new IBUF)
++    reset_ibuf.io.I := reset
++
++    val sysclk: Clock = sys_clock.get() match {
++      case Some(x: SysClockZCU106PlacedOverlay) => x.clock
++    }
++
++    val powerOnReset: Bool = PowerOnResetFPGAOnly(sysclk)
++    sdc.addAsyncPath(Seq(powerOnReset))
++
++    val ereset: Bool = chiplink.get() match {
++      case Some(x: ChipLinkZCU106PlacedOverlay) => !x.ereset_n
++      case _ => false.B
++    }
++
++    pllReset := (reset_ibuf.io.O || powerOnReset || ereset)
++  }
++}
+diff --git a/src/main/scala/shell/xilinx/ZCU106Shell.scala b/src/main/scala/shell/xilinx/ZCU106Shell.scala
+new file mode 100644
+index 0000000..67b8bc2
+--- /dev/null
++++ b/src/main/scala/shell/xilinx/ZCU106Shell.scala
+@@ -0,0 +1,278 @@
++// See LICENSE for license details.
++package sifive.fpgashells.shell.xilinx.zcu106shell
++
++import chisel3._
++import chisel3.{Input, Output, RawModule, withClockAndReset}
++import chisel3.experimental.{Analog, attach}
++
++import org.chipsalliance.cde.config._
++
++import freechips.rocketchip.rocket._
++import freechips.rocketchip.devices.debug._
++import freechips.rocketchip.util.{SyncResetSynchronizerShiftReg}
++
++import sifive.fpgashells.devices.xilinx.xilinxzcu106mig._
++import sifive.blocks.devices.gpio._
++import sifive.blocks.devices.spi._
++import sifive.blocks.devices.uart._
++
++import sifive.fpgashells.devices.xilinx.xilinxzcu106mig._
++import sifive.fpgashells.ip.xilinx._
++
++//-------------------------------------------------------------------------
++// ZCU106Shell
++//-------------------------------------------------------------------------
++
++trait HasDDR3 { this: ZCU106Shell =>
++  
++  require(!p.lift(MemoryXilinxDDRKey).isEmpty)
++  val ddr = IO(new XilinxZCU106MIGPads(p(MemoryXilinxDDRKey)))
++  
++  def connectMIG(dut: HasMemoryXilinxZCU106MIGModuleImp): Unit = {
++    // Clock & Reset
++    dut.xilinxzcu106mig.c0_sys_clk_i := sys_clock.asUInt
++    mig_clock                    := dut.xilinxzcu106mig.c0_ddr4_ui_clk
++    mig_sys_reset                := dut.xilinxzcu106mig.c0_ddr4_ui_clk_sync_rst
++    dut.xilinxzcu106mig.c0_ddr4_aresetn   := mig_resetn
++    dut.xilinxzcu106mig.sys_rst   := sys_reset
++
++    ddr <> dut.xilinxzcu106mig
++  }
++}
++
++abstract class ZCU106Shell(implicit val p: Parameters) extends RawModule {
++
++  //-----------------------------------------------------------------------
++  // Interface
++  //-----------------------------------------------------------------------
++  
++  // 250Mhz differential sysclk
++  val sys_diff_clock_clk_n = IO(Input(Clock()))
++  val sys_diff_clock_clk_p = IO(Input(Clock()))
++
++  // active high reset
++  val reset                = IO(Input(Bool()))
++
++  // LED
++  //val led                  = IO(Vec(8, Output(Bool())))
++
++  // UART
++  val uart_tx              = IO(Output(Bool()))
++  val uart_rx              = IO(Input(Bool()))
++  val uart_rtsn            = IO(Output(Bool()))
++  val uart_ctsn            = IO(Input(Bool()))
++
++  // SDIO
++  val sdio_clk             = IO(Output(Bool()))
++  val sdio_cmd             = IO(Analog(1.W))
++  val sdio_dat             = IO(Analog(4.W))
++
++  // JTAG
++  val jtag_TCK             = IO(Input(Clock()))
++  val jtag_TMS             = IO(Input(Bool()))
++  val jtag_TDI             = IO(Input(Bool()))
++  val jtag_TDO             = IO(Output(Bool()))
++
++  //Buttons
++  //val btn_0                = IO(Analog(1.W))
++  //val btn_1                = IO(Analog(1.W))
++  //val btn_2                = IO(Analog(1.W))
++  //val btn_3                = IO(Analog(1.W))
++
++  //Sliding switches
++  //val sw_0                 = IO(Analog(1.W))
++  //val sw_1                 = IO(Analog(1.W))
++  //val sw_2                 = IO(Analog(1.W))
++  //val sw_3                 = IO(Analog(1.W))
++  //val sw_4                 = IO(Analog(1.W))
++  //val sw_5                 = IO(Analog(1.W))
++  //val sw_6                 = IO(Analog(1.W))
++  //val sw_7                 = IO(Analog(1.W))
++
++
++  //-----------------------------------------------------------------------
++  // Wire declrations
++  //-----------------------------------------------------------------------
++
++  val sys_clock       = Wire(Clock())
++  val sys_reset       = Wire(Bool())
++
++  val dut_clock       = Wire(Clock())
++  val dut_reset       = Wire(Bool())
++  val dut_resetn      = Wire(Bool())
++
++  val dut_ndreset     = Wire(Bool())
++
++  val sd_spi_sck      = Wire(Bool())
++  val sd_spi_cs       = Wire(Bool())
++  val sd_spi_dq_i     = Wire(Vec(4, Bool()))
++  val sd_spi_dq_o     = Wire(Vec(4, Bool()))
++
++  val do_reset        = Wire(Bool())
++
++  val mig_mmcm_locked = Wire(Bool())
++  val mig_sys_reset   = Wire(Bool())
++
++  val mig_clock       = Wire(Clock())
++  val mig_reset       = Wire(Bool())
++  val mig_resetn      = Wire(Bool())
++
++  val pcie_dat_reset  = Wire(Bool())
++  val pcie_dat_resetn = Wire(Bool())
++  val pcie_cfg_reset  = Wire(Bool())
++  val pcie_cfg_resetn = Wire(Bool())
++  val pcie_dat_clock  = Wire(Clock())
++  val pcie_cfg_clock  = Wire(Clock())
++  val mmcm_lock_pcie  = Wire(Bool())
++
++  //-----------------------------------------------------------------------
++  // Differential clock
++  //-----------------------------------------------------------------------
++
++  val sys_clk_ibufds = Module(new IBUFDS)
++  sys_clk_ibufds.io.I  := sys_diff_clock_clk_p
++  sys_clk_ibufds.io.IB := sys_diff_clock_clk_n
++
++  //-----------------------------------------------------------------------
++  // System clock and reset
++  //-----------------------------------------------------------------------
++
++  // Clock that drives the clock generator and the MIG
++  sys_clock := sys_clk_ibufds.io.O
++
++  // Allow the debug module to reset everything. Resets the MIG
++  sys_reset := reset | dut_ndreset
++
++  //-----------------------------------------------------------------------
++  // Clock Generator
++  //-----------------------------------------------------------------------
++
++  //25MHz and multiples
++  val zcu106_sys_clock_mmcm0 = Module(new zcu106_sys_clock_mmcm0)
++  zcu106_sys_clock_mmcm0.io.clk_in1 := sys_clock.asUInt
++  zcu106_sys_clock_mmcm0.io.reset   := reset
++  val clk12_5              = zcu106_sys_clock_mmcm0.io.clk_out1
++  val clk25                = zcu106_sys_clock_mmcm0.io.clk_out2
++  val clk37_5              = zcu106_sys_clock_mmcm0.io.clk_out3
++  val clk50                = zcu106_sys_clock_mmcm0.io.clk_out4
++  val clk100               = zcu106_sys_clock_mmcm0.io.clk_out5
++  val clk150               = zcu106_sys_clock_mmcm0.io.clk_out6
++  val clk75                = zcu106_sys_clock_mmcm0.io.clk_out7
++  val zcu106_sys_clock_mmcm0_locked = zcu106_sys_clock_mmcm0.io.locked
++
++  //65MHz and multiples
++  val zcu106_sys_clock_mmcm1 = Module(new zcu106_sys_clock_mmcm1)
++  zcu106_sys_clock_mmcm1.io.clk_in1 := sys_clock.asUInt
++  zcu106_sys_clock_mmcm1.io.reset   := reset
++  val clk32_5              = zcu106_sys_clock_mmcm1.io.clk_out1
++  val clk65                = zcu106_sys_clock_mmcm1.io.clk_out2
++  val zcu106_sys_clock_mmcm1_locked = zcu106_sys_clock_mmcm1.io.locked
++
++  // DUT clock
++  dut_clock := clk37_5
++
++  //-----------------------------------------------------------------------
++  // System reset
++  //-----------------------------------------------------------------------
++
++  do_reset             := !mig_mmcm_locked || !mmcm_lock_pcie || mig_sys_reset || !zcu106_sys_clock_mmcm0_locked ||
++                          !zcu106_sys_clock_mmcm1_locked
++  mig_resetn           := !mig_reset
++  dut_resetn           := !dut_reset
++  pcie_dat_resetn      := !pcie_dat_reset
++  pcie_cfg_resetn      := !pcie_cfg_reset
++
++
++  val safe_reset = Module(new zcu106reset)
++
++  safe_reset.io.areset := do_reset
++  safe_reset.io.clock1 := mig_clock
++  mig_reset            := safe_reset.io.reset1
++  safe_reset.io.clock2 := pcie_dat_clock
++  pcie_dat_reset       := safe_reset.io.reset2
++  safe_reset.io.clock3 := pcie_cfg_clock
++  pcie_cfg_reset       := safe_reset.io.reset3
++  safe_reset.io.clock4 := dut_clock
++  dut_reset            := safe_reset.io.reset4
++
++  //overrided in connectMIG and connect PCIe
++  //provide defaults to allow above reset sequencing logic to work without both
++  mig_clock            := dut_clock
++  pcie_dat_clock       := dut_clock
++  pcie_cfg_clock       := dut_clock
++  mig_mmcm_locked      := "b1".U
++  mmcm_lock_pcie       := "b1".U
++ 
++  //---------------------------------------------------------------------
++  // Debug JTAG
++  //---------------------------------------------------------------------
++
++  def connectDebugJTAG(dut: HasPeripheryDebug): SystemJTAGIO = {
++    require(dut.debug.isDefined, "Connecting JTAG requires that debug module exists")
++    val djtag     = dut.debug.get.systemjtag.get
++    djtag.jtag.TCK := jtag_TCK
++    djtag.jtag.TMS := jtag_TMS
++    djtag.jtag.TDI := jtag_TDI
++    jtag_TDO       := djtag.jtag.TDO.data
++
++    djtag.mfr_id   := p(JtagDTMKey).idcodeManufId.U(11.W)
++    djtag.part_number := p(JtagDTMKey).idcodePartNum.U(16.W)
++    djtag.version  := p(JtagDTMKey).idcodeVersion.U(4.W)
++
++    djtag.reset    := PowerOnResetFPGAOnly(dut_clock)
++    dut_ndreset    := dut.debug.get.ndreset
++    djtag
++  }
++
++  //-----------------------------------------------------------------------
++  // UART
++  //-----------------------------------------------------------------------
++
++  uart_rtsn := false.B
++
++  def connectUART(dut: HasPeripheryUART): Unit = dut.uart.headOption.foreach(connectUART)
++
++  def connectUART(uart: UARTPortIO): Unit = {
++    uart.rxd := SyncResetSynchronizerShiftReg(uart_rx, 2, init = true.B, name=Some("uart_rxd_sync"))
++    uart_tx  := uart.txd
++  }
++
++  //-----------------------------------------------------------------------
++  // SPI
++  //-----------------------------------------------------------------------
++
++  def connectSPI(dut: HasPeripherySPI): Unit = dut.spi.headOption.foreach(connectSPI)
++
++  def connectSPI(spi: SPIPortIO): Unit = {
++    // SPI
++    sd_spi_sck := spi.sck
++    sd_spi_cs  := spi.cs(0)
++
++    spi.dq.zipWithIndex.foreach {
++      case(pin, idx) =>
++        sd_spi_dq_o(idx) := pin.o
++        pin.i            := sd_spi_dq_i(idx)
++    }
++
++    //-------------------------------------------------------------------
++    // SDIO <> SPI Bridge
++    //-------------------------------------------------------------------
++
++    val ip_sdio_spi = Module(new sdio_spi_bridge())
++
++    ip_sdio_spi.io.clk   := dut_clock
++    ip_sdio_spi.io.reset := dut_reset
++
++    // SDIO
++    attach(sdio_dat, ip_sdio_spi.io.sd_dat)
++    attach(sdio_cmd, ip_sdio_spi.io.sd_cmd)
++    sdio_clk := ip_sdio_spi.io.spi_sck
++
++    // SPI
++    ip_sdio_spi.io.spi_sck  := sd_spi_sck
++    ip_sdio_spi.io.spi_cs   := sd_spi_cs
++    sd_spi_dq_i             := ip_sdio_spi.io.spi_dq_i.asBools
++    ip_sdio_spi.io.spi_dq_o := sd_spi_dq_o.asUInt
++  }
++
++}
+diff --git a/xilinx/zcu106/constraints/zcu106-master.xdc b/xilinx/zcu106/constraints/zcu106-master.xdc
+new file mode 100644
+index 0000000..d79ec23
+--- /dev/null
++++ b/xilinx/zcu106/constraints/zcu106-master.xdc
+@@ -0,0 +1,12 @@
++#-------------- MCS Generation ----------------------
++#set_property BITSTREAM.CONFIG.EXTMASTERCCLK_EN div-1  [current_design]
++#set_property BITSTREAM.CONFIG.SPI_FALL_EDGE YES       [current_design]
++#set_property BITSTREAM.CONFIG.SPI_BUSWIDTH 8          [current_design]
++#set_property BITSTREAM.GENERAL.COMPRESS TRUE          [current_design]
++#set_property BITSTREAM.CONFIG.UNUSEDPIN Pullnone      [current_design]
++#set_property CFGBVS GND                               [current_design]
++#set_property CONFIG_VOLTAGE 1.8                       [current_design]
++#set_property CONFIG_MODE SPIx8                        [current_design]
++
++
++
+diff --git a/xilinx/zcu106/tcl/board.tcl b/xilinx/zcu106/tcl/board.tcl
+new file mode 100644
+index 0000000..2bcd370
+--- /dev/null
++++ b/xilinx/zcu106/tcl/board.tcl
+@@ -0,0 +1,6 @@
++# See LICENSE for license details.
++set name {zcu106}
++set part_fpga {xczu7ev-ffvc1156-2-e}
++# Board: xilinx.com:vcu118:part0:2.0
++# However, if we set this we cannot control PCIe locations
++set part_board {}
+diff --git a/xilinx/zcu106/vsrc/sdio.v b/xilinx/zcu106/vsrc/sdio.v
+new file mode 100644
+index 0000000..ff7ebc8
+--- /dev/null
++++ b/xilinx/zcu106/vsrc/sdio.v
+@@ -0,0 +1,59 @@
++// See LICENSE for license details.
++`timescale 1ns/1ps
++`default_nettype none
++
++module sdio_spi_bridge (
++  input wire clk,
++  input wire reset,
++  // SDIO
++  inout  wire       sd_cmd,
++  inout  wire [3:0] sd_dat,
++  output wire       sd_sck,
++  // QUAD SPI
++  input  wire       spi_sck,
++  input  wire [3:0] spi_dq_o,
++  output wire [3:0] spi_dq_i,
++  output wire       spi_cs
++);
++
++  wire mosi, miso;
++  reg miso_sync [1:0];
++
++  assign mosi = spi_dq_o[0];
++  assign spi_dq_i = {2'b00, miso_sync[1], 1'b0};
++
++  assign sd_sck = spi_sck;
++
++  IOBUF buf_cmd (
++    .IO(sd_cmd),
++    .I(mosi),
++    .O(),
++    .T(1'b0)
++  );
++
++  IOBUF buf_dat0 (
++    .IO(sd_dat[0]),
++    .I(),
++    .O(miso),
++    .T(1'b1)
++  );
++
++  IOBUF buf_dat3 (
++    .IO(sd_dat[3]),
++    .I(spi_cs),
++    .O(),
++    .T(1'b0)
++  );
++
++  always @(posedge clk) begin
++    if (reset) begin
++       miso_sync[0] <= 1'b0;
++       miso_sync[1] <= 1'b0;
++    end else begin
++       miso_sync[0] <= miso;
++       miso_sync[1] <= miso_sync[0];
++    end
++  end
++endmodule
++
++`default_nettype wire
