@@ -13,7 +13,7 @@ import sifive.blocks.devices.spi.{PeripherySPIKey, SPIParams}
 import sifive.blocks.devices.uart.{PeripheryUARTKey, UARTParams}
 
 import sifive.fpgashells.shell.{DesignKey}
-import sifive.fpgashells.shell.xilinx.{ZCU106ShellPMOD, ZCU106DDRSize}
+import sifive.fpgashells.shell.xilinx.{ZCU106ShellPMOD, ZCU106ShellPMOD2, ZCU106DDRSize}
 
 import testchipip.serdes.{SerialTLKey}
 
@@ -24,6 +24,7 @@ class WithDefaultPeripherals extends Config((site, here, up) => {
   case PeripheryUARTKey => List(UARTParams(address = BigInt(0x64000000L)))
   case PeripherySPIKey => List(SPIParams(rAddress = BigInt(0x64001000L)))
   case ZCU106ShellPMOD => "SDIO"
+  case ZCU106ShellPMOD2 => "JTAG_J87"
 })
 
 class WithSystemModifications extends Config((site, here, up) => {
@@ -63,7 +64,7 @@ class WithZCU106Tweaks extends Config(
   new WithDefaultPeripherals ++
   new chipyard.config.WithTLBackingMemory ++ // use TL backing memory
   new WithSystemModifications ++ // setup busses, use sdboot bootrom, setup ext. mem. size
-  new chipyard.config.WithNoDebug ++ // remove debug module
+//  new chipyard.config.WithNoDebug ++ // remove debug module
   new freechips.rocketchip.subsystem.WithoutTLMonitors ++
   new freechips.rocketchip.subsystem.WithNMemoryChannels(1)
 )
