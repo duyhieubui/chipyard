@@ -1,0 +1,255 @@
+diff --git a/bsp/arty/arty.h b/bsp/arty/arty.h
+index 162ec2b..000caa8 100644
+--- a/bsp/arty/arty.h
++++ b/bsp/arty/arty.h
+@@ -6,7 +6,7 @@
+ extern "C" {
+ #endif
+ 
+-#include "rv_arch.h"
++#include "rv/arch.h"
+ #include "rv.h"
+ #include "gpio.h"
+ // #include "i2c.h"
+diff --git a/bsp/arty/boot/startup.S b/bsp/arty/boot/startup.S
+index 0e8106f..46c30c9 100644
+--- a/bsp/arty/boot/startup.S
++++ b/bsp/arty/boot/startup.S
+@@ -23,8 +23,8 @@
+  * @date 2023-05-20
+  */
+  
+-#include "rv_arch.h"
+-#include "rv_encoding.h"
++#include "rv/arch.h"
++#include "rv/encoding.h"
+ 
+ .align 4
+ .section .text.trap_vector
+diff --git a/bsp/bearlyml/inc/hal_rcc.h b/bsp/bearlyml/inc/hal_rcc.h
+index b8b45f2..87a9e18 100644
+--- a/bsp/bearlyml/inc/hal_rcc.h
++++ b/bsp/bearlyml/inc/hal_rcc.h
+@@ -15,7 +15,7 @@
+ extern "C" {
+ #endif
+ 
+-#include "rv_common.h"
++#include "rv/common.h"
+ #include "ll_pll.h"
+ #include "ll_rcc.h"
+ 
+diff --git a/bsp/bearlyml/inc/ll_pll.h b/bsp/bearlyml/inc/ll_pll.h
+index bd43bec..859c3c0 100644
+--- a/bsp/bearlyml/inc/ll_pll.h
++++ b/bsp/bearlyml/inc/ll_pll.h
+@@ -5,7 +5,7 @@
+ extern "C" {
+ #endif
+ 
+-#include "rv_common.h"
++#include "rv/common.h"
+ 
+ 
+ typedef struct {
+diff --git a/bsp/bearlyml/inc/ll_rcc.h b/bsp/bearlyml/inc/ll_rcc.h
+index 535fbc8..3039d7a 100644
+--- a/bsp/bearlyml/inc/ll_rcc.h
++++ b/bsp/bearlyml/inc/ll_rcc.h
+@@ -5,7 +5,7 @@
+ extern "C" {
+ #endif
+ 
+-#include "rv_common.h"
++#include "rv/common.h"
+ 
+ 
+ typedef struct {
+diff --git a/bsp/bearlyml23/inc/bearlyml23.h b/bsp/bearlyml23/inc/bearlyml23.h
+index d3549f6..802f821 100644
+--- a/bsp/bearlyml23/inc/bearlyml23.h
++++ b/bsp/bearlyml23/inc/bearlyml23.h
+@@ -6,8 +6,8 @@
+ extern "C" {
+ #endif
+ 
+-#include "rv_arch.h"
+-#include "rv_common.h"
++#include "rv/arch.h"
++#include "rv/common.h"
+ #include "ll_clint.h"
+ #include "ll_core.h"
+ #include "ll_dma.h"
+diff --git a/bsp/bearlyml23/inc/hal_dma.h b/bsp/bearlyml23/inc/hal_dma.h
+index 6c90417..bc1de60 100644
+--- a/bsp/bearlyml23/inc/hal_dma.h
++++ b/bsp/bearlyml23/inc/hal_dma.h
+@@ -15,7 +15,7 @@
+ extern "C" {
+ #endif
+ 
+-#include "rv_common.h"
++#include "rv/common.h"
+ #include "ll_dma.h"
+ 
+ typedef enum {
+diff --git a/bsp/bearlyml23/inc/hal_rcc.h b/bsp/bearlyml23/inc/hal_rcc.h
+index 67fd346..29fc791 100644
+--- a/bsp/bearlyml23/inc/hal_rcc.h
++++ b/bsp/bearlyml23/inc/hal_rcc.h
+@@ -15,7 +15,7 @@
+ extern "C" {
+ #endif
+ 
+-#include "rv_common.h"
++#include "rv/common.h"
+ #include "ll_rcc.h"
+ #include "ll_pll.h"
+ 
+diff --git a/bsp/bearlyml23/inc/ll_dma.h b/bsp/bearlyml23/inc/ll_dma.h
+index d7e4731..557f116 100644
+--- a/bsp/bearlyml23/inc/ll_dma.h
++++ b/bsp/bearlyml23/inc/ll_dma.h
+@@ -15,7 +15,7 @@
+ extern "C" {
+ #endif
+ 
+-#include "rv_common.h"
++#include "rv/common.h"
+ 
+ #define DMA_ERR_POS                        (0U)
+ #define DMA_ERR_MSK                        (0x1U << DMA_ERR_POS)
+diff --git a/bsp/bearlyml23/inc/ll_pll.h b/bsp/bearlyml23/inc/ll_pll.h
+index 25e1a67..b3cd089 100644
+--- a/bsp/bearlyml23/inc/ll_pll.h
++++ b/bsp/bearlyml23/inc/ll_pll.h
+@@ -5,7 +5,7 @@
+ extern "C" {
+ #endif
+ 
+-#include "rv_common.h"
++#include "rv/common.h"
+ 
+ 
+ typedef struct {
+diff --git a/bsp/bearlyml23/inc/ll_rcc.h b/bsp/bearlyml23/inc/ll_rcc.h
+index 79586fc..90c3afd 100644
+--- a/bsp/bearlyml23/inc/ll_rcc.h
++++ b/bsp/bearlyml23/inc/ll_rcc.h
+@@ -5,7 +5,7 @@
+ extern "C" {
+ #endif
+ 
+-#include "rv_common.h"
++#include "rv/common.h"
+ 
+ 
+ typedef struct {
+diff --git a/bsp/bearlyml23/startup/startup.S b/bsp/bearlyml23/startup/startup.S
+index 43372d5..e76450d 100644
+--- a/bsp/bearlyml23/startup/startup.S
++++ b/bsp/bearlyml23/startup/startup.S
+@@ -23,8 +23,8 @@
+  * @date 2023-05-20
+  */
+  
+-#include "rv_arch.h"
+-#include "rv_encoding.h"
++#include "rv/arch.h"
++#include "rv/encoding.h"
+ 
+ .align 4
+ .section .text.trap_vector
+diff --git a/bsp/eaglex/eaglex.h b/bsp/eaglex/eaglex.h
+index 3e6aacb..b15e1ab 100644
+--- a/bsp/eaglex/eaglex.h
++++ b/bsp/eaglex/eaglex.h
+@@ -6,7 +6,7 @@
+ extern "C" {
+ #endif
+ 
+-#include "rv_arch.h"
++#include "rv/arch.h"
+ #include "rv.h"
+ #include "uart.h"
+ 
+diff --git a/bsp/robo23/inc/ll_switchcap.h b/bsp/robo23/inc/ll_switchcap.h
+index 346280a..c7274a1 100644
+--- a/bsp/robo23/inc/ll_switchcap.h
++++ b/bsp/robo23/inc/ll_switchcap.h
+@@ -5,7 +5,7 @@
+ extern "C" {
+ #endif
+ 
+-#include "rv_common.h"
++#include "rv/common.h"
+ 
+ 
+ typedef struct {
+diff --git a/bsp/robo23/inc/robo23.h b/bsp/robo23/inc/robo23.h
+index d113b06..09f0dfe 100644
+--- a/bsp/robo23/inc/robo23.h
++++ b/bsp/robo23/inc/robo23.h
+@@ -5,8 +5,8 @@
+ extern "C" {
+ #endif
+ 
+-#include "rv_arch.h"
+-#include "rv_common.h"
++#include "rv/arch.h"
++#include "rv/common.h"
+ #include "ll_clint.h"
+ #include "ll_core.h"
+ #include "ll_gpio.h"
+diff --git a/bsp/robo23/startup/startup.S b/bsp/robo23/startup/startup.S
+index 43372d5..e76450d 100644
+--- a/bsp/robo23/startup/startup.S
++++ b/bsp/robo23/startup/startup.S
+@@ -23,8 +23,8 @@
+  * @date 2023-05-20
+  */
+  
+-#include "rv_arch.h"
+-#include "rv_encoding.h"
++#include "rv/arch.h"
++#include "rv/encoding.h"
+ 
+ .align 4
+ .section .text.trap_vector
+diff --git a/bsp/scripts/create_project.py b/bsp/scripts/create_project.py
+index 287a525..d6ebf0d 100644
+--- a/bsp/scripts/create_project.py
++++ b/bsp/scripts/create_project.py
+@@ -66,16 +66,16 @@ class ProjectBuilder:
+         
+         # headers
+         self.generateFromTemplate(
+-            os.path.join(self.PROJECT_ROOT, self.chipname, "inc", "rv_common.h"), 
++            os.path.join(self.PROJECT_ROOT, self.chipname, "inc", "rv/common.h"),
+             "peripherals/rv_common.h"
+             )
+         self.generateFromTemplate(
+-            os.path.join(self.PROJECT_ROOT, self.chipname, "inc", "rv_arch.h"), 
++            os.path.join(self.PROJECT_ROOT, self.chipname, "inc", "rv/arch.h"),
+             "peripherals/rv_arch.h"
+             )
+ 
+         self.generateFromTemplate(
+-            os.path.join(self.PROJECT_ROOT, self.chipname, "inc", "rv_encoding.h"), 
++            os.path.join(self.PROJECT_ROOT, self.chipname, "inc", "rv/encoding.h"),
+             "peripherals/rv_encoding.h"
+             )
+         
+diff --git a/driver/rocket-chip-blocks/pwm/pwm.h b/driver/rocket-chip-blocks/pwm/pwm.h
+index 8709654..08554d1 100644
+--- a/driver/rocket-chip-blocks/pwm/pwm.h
++++ b/driver/rocket-chip-blocks/pwm/pwm.h
+@@ -5,7 +5,7 @@
+ extern "C" {
+ #endif
+ 
+-#include "rv_common.h"
++#include "rv/common.h"
+ 
+ #define PWM_PWMSCALE_POS                        (0U)
+ #define PWM_PWMSCALE_MSK                        (0x7U << PWM_PWMSCALE_POS)
